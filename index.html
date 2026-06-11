@@ -4,8 +4,6 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>iuaM</title>
-
-  <!-- 桌面 App（加入主畫面）設定 -->
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
@@ -14,7 +12,6 @@
   <link rel="manifest" href="manifest.json" />
   <link rel="apple-touch-icon" href="icon-512.png" />
   <link rel="icon" type="image/png" href="icon-512.png" />
-
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;600;700;800&family=Noto+Serif+TC:wght@500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -339,11 +336,9 @@ input.plain:focus { border-color: var(--accent); box-shadow: 0 0 0 4px var(--acc
 </head>
 <body>
   <div id="root"></div>
-
   <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
   <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
   <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
-
 <script type="text/babel" data-src="tweaks-panel.jsx">
 // @ds-adherence-ignore -- omelette starter scaffold (raw elements/hex/px by design)
 
@@ -1037,31 +1032,49 @@ function marginFromPrice(cost, price) {
 
 function PricingPage({ products, setProducts, defaultMargin }) {
   const [cost, setCost] = useState("");
+  const [price, setPrice] = useState("");
   const [margin, setMargin] = useState(defaultMargin);
-  const [manualPrice, setManualPrice] = useState(null); // 使用者手動覆寫售價
   const [saving, setSaving] = useState(false);
   const [name, setName] = useState("");
   const [stockQty, setStockQty] = useState(1);
   const [editId, setEditId] = useState(null);
 
   const c = Number(cost) || 0;
-  const suggested = priceFromMargin(c, margin);
-  const price = manualPrice != null ? (Number(manualPrice) || 0) : Math.round(suggested);
-  const effMargin = c > 0 ? marginFromPrice(c, price) : 0;
-  const profit = price - c;
-  const markup = c > 0 ? price / c : 0;
+  const pr = Number(price) || 0;
+  const effMargin = pr > 0 ? marginFromPrice(c, pr) : margin;
+  const profit = pr - c;
+  const markup = c > 0 ? pr / c : 0;
 
-  const reset = () => { setCost(""); setMargin(defaultMargin); setManualPrice(null); setName(""); setStockQty(1); setEditId(null); };
+  // 雙向連動：毛利率當連結，改「成本」或「售價」都會自動帶動另一邊
+  const onCost = (v) => {
+    setCost(v);
+    const cc = Number(v) || 0;
+    if (cc > 0) setPrice(String(Math.round(priceFromMargin(cc, margin))));
+  };
+  const onPrice = (v) => {
+    setPrice(v);
+    const pp = Number(v) || 0;
+    if (pp > 0) setCost(String(Math.round(pp * (1 - Math.min(margin, 95) / 100))));
+  };
+  const onMargin = (m) => {
+    setMargin(m);
+    const cc = Number(cost) || 0;
+    const pp = Number(price) || 0;
+    if (cc > 0) setPrice(String(Math.round(priceFromMargin(cc, m))));
+    else if (pp > 0) setCost(String(Math.round(pp * (1 - Math.min(m, 95) / 100))));
+  };
+
+  const reset = () => { setCost(""); setPrice(""); setMargin(defaultMargin); setName(""); setStockQty(1); setEditId(null); };
 
   const saveProduct = () => {
-    if (c <= 0 || !name.trim()) return;
-    const item = { id: editId || uid(), name: name.trim(), cost: c, price: Math.round(price), margin: Math.round(effMargin), stock: Math.max(0, stockQty) };
+    if (c <= 0 || pr <= 0 || !name.trim()) return;
+    const item = { id: editId || uid(), name: name.trim(), cost: c, price: pr, margin: Math.round(effMargin), stock: Math.max(0, stockQty) };
     setProducts((prev) => editId ? prev.map((p) => p.id === editId ? item : p) : [item, ...prev]);
     setSaving(false); reset();
   };
 
   const editProduct = (p) => {
-    setCost(String(p.cost)); setManualPrice(String(p.price)); setMargin(p.margin);
+    setCost(String(p.cost)); setPrice(String(p.price)); setMargin(p.margin);
     setName(p.name); setStockQty(p.stock || 0); setEditId(p.id);
     setSaving(true);
   };
@@ -1070,52 +1083,52 @@ function PricingPage({ products, setProducts, defaultMargin }) {
     <div>
       {/* 計算器卡片 */}
       <div className="card fade-in" style={{ padding: 20, marginTop: 12 }}>
-        <div className="row" style={{ gap: 8, marginBottom: 16 }}>
+        <div className="row" style={{ gap: 8, marginBottom: 6 }}>
           <span style={{ color: "var(--accent-deep)" }}><Icon name="spark" size={20} /></span>
           <span style={{ fontFamily: "var(--font-head)", fontWeight: 600, fontSize: 16 }}>定價小幫手</span>
         </div>
+        <div className="tiny muted" style={{ marginBottom: 16 }}>成本、售價任一邊輸入都會自動換算，毛利率拉桿是兩邊的連結</div>
 
         <div className="field">
           <label>進貨成本（每件批發價）</label>
-          <MoneyInput value={cost} onChange={(v) => { setCost(v); setManualPrice(null); }} placeholder="輸入一件進貨多少錢" autoFocus />
+          <MoneyInput value={cost} onChange={onCost} placeholder="一件進貨多少錢" autoFocus />
         </div>
 
-        <div className="field" style={{ marginBottom: 6 }}>
+        <div className="field" style={{ marginBottom: 14 }}>
           <div className="between" style={{ marginBottom: 2 }}>
             <label style={{ margin: 0 }}>目標毛利率</label>
-            <span className="num" style={{ fontWeight: 700, color: "var(--accent-deep)", fontSize: 17 }}>{Math.round(manualPrice != null && c > 0 ? effMargin : margin)}%</span>
+            <span className="num" style={{ fontWeight: 700, color: "var(--accent-deep)", fontSize: 17 }}>{Math.round(effMargin)}%</span>
           </div>
           <input className="range" type="range" min="5" max="90" step="1"
-            value={Math.round(manualPrice != null && c > 0 ? effMargin : margin)}
-            onChange={(e) => { setMargin(Number(e.target.value)); setManualPrice(null); }} />
+            value={Math.round(Math.min(Math.max(effMargin, 5), 90))}
+            onChange={(e) => onMargin(Number(e.target.value))} />
           <div className="between tiny muted"><span>薄利多銷</span><span>高單價</span></div>
+        </div>
+
+        <div className="field" style={{ marginBottom: 0 }}>
+          <label>售價（可直接改，會反推成本）</label>
+          <MoneyInput value={price} onChange={onPrice} placeholder="想賣多少錢" />
         </div>
       </div>
 
       {/* 結果卡 */}
       <div className="card fade-in" style={{ padding: 22, marginTop: 14, background: "linear-gradient(160deg, var(--accent-tint), var(--surface))" }}>
-        <div className="tiny muted" style={{ fontWeight: 600 }}>建議售價</div>
-        <div className="row" style={{ alignItems: "baseline", gap: 10, marginTop: 2, flexWrap: "wrap" }}>
-          <span className="num" style={{ fontSize: 40, fontWeight: 800, color: "var(--accent-deep)", lineHeight: 1 }}>{c > 0 ? NT(price) : "—"}</span>
-          {c > 0 && <span className="num tiny" style={{ color: "var(--ink-soft)" }}>約 {markup.toFixed(1)} 倍進價</span>}
-        </div>
-
-        {/* 可手動微調售價 */}
-        <div className="field" style={{ margin: "16px 0 0" }}>
-          <label>想改成整數價？直接調售價</label>
-          <MoneyInput value={manualPrice != null ? manualPrice : (c > 0 ? String(Math.round(price)) : "")}
-            onChange={(v) => setManualPrice(v)} placeholder="自訂售價" />
-        </div>
-
-        <div className="row" style={{ gap: 12, marginTop: 16, paddingTop: 16, borderTop: "1px dashed var(--line)" }}>
-          <Stat label="每件淨賺" value={c > 0 ? NT(profit) : "—"} tone={profit >= 0 ? "good" : "warn"} />
-          <Stat label="實際毛利率" value={c > 0 ? pct(effMargin) : "—"} tone="good" />
+        <div className="between" style={{ alignItems: "flex-end" }}>
+          <div>
+            <div className="tiny muted" style={{ fontWeight: 600 }}>每件淨賺</div>
+            <div className="num" style={{ fontSize: 40, fontWeight: 800, color: profit >= 0 ? "var(--good)" : "var(--warn)", lineHeight: 1 }}>{(c > 0 && pr > 0) ? NT(profit) : "—"}</div>
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <div className="tiny muted">毛利率</div>
+            <div className="num" style={{ fontWeight: 700, fontSize: 18, color: "var(--accent-deep)" }}>{(c > 0 && pr > 0) ? pct(effMargin) : "—"}</div>
+            {(c > 0 && pr > 0) && <div className="num tiny muted">約 {markup.toFixed(1)} 倍進價</div>}
+          </div>
         </div>
 
         <button className="btn btn-primary btn-block" style={{ marginTop: 18 }}
-          disabled={c <= 0}
-          onClick={() => { if (c > 0) { setSaving(true); } }}>
-                    <span style={{ color: "#fff" }}><Icon name="plus" size={18} /></span> {editId ? "存成商品" : "存成商品（放進庫存）"}
+          disabled={c <= 0 || pr <= 0}
+          onClick={() => { if (c > 0 && pr > 0) { setSaving(true); } }}>
+          <span style={{ color: "#fff" }}><Icon name="plus" size={18} /></span> {editId ? "存成商品" : "存成商品（放進庫存）"}
         </button>
       </div>
 
