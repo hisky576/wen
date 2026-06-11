@@ -1,0 +1,15 @@
+{
+  "name": "iuaM・成本利潤計算器",
+  "short_name": "iuaM",
+  "description": "衣服小生意的成本、利潤、訂單記帳工具",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f7f0e7",
+  "theme_color": "#bb8a5c",
+  "icons": [
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
