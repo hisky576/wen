@@ -286,6 +286,55 @@ input.plain:focus { border-color: var(--accent); box-shadow: 0 0 0 4px var(--acc
 .muted { color: var(--ink-soft); }
 .tiny { font-size: 12px; }
 
+/* ---- Inventory ---- */
+.sell-btn {
+  width: 54px; height: 54px; border-radius: 50%; flex-shrink: 0;
+  border: 2.5px solid var(--accent); background: var(--surface);
+  color: var(--accent); display: grid; place-items: center; cursor: pointer;
+  transition: transform .12s ease, background .25s, border-color .25s, color .25s;
+  position: relative;
+}
+.sell-btn:not(.sold):active { transform: scale(.86); }
+.sell-btn:not(.sold):hover { background: var(--accent-tint); }
+.sell-btn .dot { width: 11px; height: 11px; border-radius: 50%; background: var(--accent-soft); }
+.sell-btn.checked { background: var(--accent); border-color: var(--accent); color: #fff; animation: sellpop .45s cubic-bezier(.3,1.5,.5,1); }
+.sell-btn.sold { border-color: var(--line); color: var(--ink-faint); background: var(--surface-2); cursor: not-allowed; }
+.sell-btn .lbl { font-size: 11px; font-weight: 800; }
+@keyframes sellpop { 0% { transform: scale(1); } 45% { transform: scale(1.18); } 100% { transform: scale(1); } }
+
+.inv-row { padding: 13px 15px; display: flex; align-items: center; gap: 14px; transition: opacity .3s; }
+.inv-row.out { opacity: .6; }
+
+.stock-num { font-family: var(--font-num); font-weight: 800; line-height: 1; }
+
+.badge { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 999px; }
+.badge.sold-out { background: var(--warn-soft); color: var(--warn); }
+.badge.low { background: #f3ead1; color: #a9822f; }
+.badge.ok { background: var(--good-soft); color: var(--good); }
+
+.restock-pill {
+  border: 1.5px dashed var(--line); background: var(--surface);
+  border-radius: 999px; padding: 7px 13px; font-size: 12.5px; font-weight: 700;
+  color: var(--accent-deep); cursor: pointer; display: inline-flex; align-items: center; gap: 5px;
+}
+.restock-pill:active { transform: scale(.96); }
+
+/* toast */
+.toast {
+  position: absolute; left: 16px; right: 16px; bottom: 88px; z-index: 45;
+  background: var(--ink); color: #fff; border-radius: 16px;
+  padding: 13px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  box-shadow: 0 16px 36px -12px rgba(70,58,46,.55); animation: slideup .28s cubic-bezier(.2,.9,.3,1);
+}
+.toast .t-txt { font-size: 14px; font-weight: 600; }
+.toast .t-txt .num { color: #f0d9bf; }
+.toast button {
+  background: rgba(255,255,255,.16); color: #fff; border: none; border-radius: 10px;
+  padding: 8px 13px; font-weight: 700; cursor: pointer; font-family: var(--font-body);
+  display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
+}
+.toast button:active { transform: scale(.95); }
+
   </style>
 </head>
 <body>
@@ -916,6 +965,11 @@ function Icon({ name, size = 23 }) {
     case "left": return (<svg {...p}><path d="m15 6-6 6 6 6"/></svg>);
     case "right": return (<svg {...p}><path d="m9 6 6 6-6 6"/></svg>);
     case "coins": return (<svg {...p}><ellipse cx="9" cy="7" rx="5" ry="2.5"/><path d="M4 7v5c0 1.4 2.2 2.5 5 2.5s5-1.1 5-2.5V7"/><path d="M10 14.8c.5 1.2 2.5 2.2 5 2.2 2.8 0 5-1.1 5-2.5v-5"/><path d="M15 9.6c2.8 0 5-1.1 5-2.5S17.8 4.6 15 4.6c-1 0-1.9.1-2.6.4"/></svg>);
+    case "box": return (<svg {...p}><path d="M3.5 7.6 12 3l8.5 4.6v8.8L12 21l-8.5-4.6z"/><path d="m3.6 7.7 8.4 4.5 8.4-4.5"/><path d="M12 12.2V21"/></svg>);
+    case "check": return (<svg {...p}><path d="m5 12.5 4.5 4.5L19 7"/></svg>);
+    case "undo": return (<svg {...p}><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H10"/></svg>);
+    case "bag": return (<svg {...p}><path d="M6.5 8h11l-1 11.5a1 1 0 0 1-1 .9H8.5a1 1 0 0 1-1-.9z"/><path d="M9 8a3 3 0 0 1 6 0"/></svg>);
+    case "restock": return (<svg {...p}><path d="M12 8v8M8 12h8"/><circle cx="12" cy="12" r="9"/></svg>);
     default: return null;
   }
 }
@@ -987,6 +1041,7 @@ function PricingPage({ products, setProducts, defaultMargin }) {
   const [manualPrice, setManualPrice] = useState(null); // 使用者手動覆寫售價
   const [saving, setSaving] = useState(false);
   const [name, setName] = useState("");
+  const [stockQty, setStockQty] = useState(1);
   const [editId, setEditId] = useState(null);
 
   const c = Number(cost) || 0;
@@ -996,18 +1051,18 @@ function PricingPage({ products, setProducts, defaultMargin }) {
   const profit = price - c;
   const markup = c > 0 ? price / c : 0;
 
-  const reset = () => { setCost(""); setMargin(defaultMargin); setManualPrice(null); setName(""); setEditId(null); };
+  const reset = () => { setCost(""); setMargin(defaultMargin); setManualPrice(null); setName(""); setStockQty(1); setEditId(null); };
 
   const saveProduct = () => {
     if (c <= 0 || !name.trim()) return;
-    const item = { id: editId || uid(), name: name.trim(), cost: c, price: Math.round(price), margin: Math.round(effMargin) };
+    const item = { id: editId || uid(), name: name.trim(), cost: c, price: Math.round(price), margin: Math.round(effMargin), stock: Math.max(0, stockQty) };
     setProducts((prev) => editId ? prev.map((p) => p.id === editId ? item : p) : [item, ...prev]);
     setSaving(false); reset();
   };
 
   const editProduct = (p) => {
     setCost(String(p.cost)); setManualPrice(String(p.price)); setMargin(p.margin);
-    setName(p.name); setEditId(p.id);
+    setName(p.name); setStockQty(p.stock || 0); setEditId(p.id);
     setSaving(true);
   };
 
@@ -1060,7 +1115,7 @@ function PricingPage({ products, setProducts, defaultMargin }) {
         <button className="btn btn-primary btn-block" style={{ marginTop: 18 }}
           disabled={c <= 0}
           onClick={() => { if (c > 0) { setSaving(true); } }}>
-          <Icon name="plus" size={18} /> 存成商品（記帳時可直接選）
+                    <span style={{ color: "#fff" }}><Icon name="plus" size={18} /></span> {editId ? "存成商品" : "存成商品（放進庫存）"}
         </button>
       </div>
 
@@ -1084,7 +1139,11 @@ function PricingPage({ products, setProducts, defaultMargin }) {
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 700, fontSize: 15, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.name}</div>
-                <div className="tiny muted num">成本 {NT(p.cost)} ・ 毛利 {p.margin}%</div>
+                <div className="tiny muted num" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span>成本 {NT(p.cost)}</span>
+                  <span style={{ color: "var(--ink-faint)" }}>・</span>
+                  <span style={{ fontWeight: 700, color: (p.stock || 0) > 0 ? "var(--accent-deep)" : "var(--warn)" }}>庫存 {p.stock || 0}</span>
+                </div>
               </div>
               <div style={{ textAlign: "right" }}>
                 <div className="num" style={{ fontWeight: 700, color: "var(--accent-deep)" }}>{NT(p.price)}</div>
@@ -1108,7 +1167,7 @@ function PricingPage({ products, setProducts, defaultMargin }) {
               placeholder="例：碎花洋裝、寬版牛仔褲"
               onChange={(e) => setName(e.target.value)} />
           </div>
-          <div className="row" style={{ gap: 10, margin: "4px 0 18px", flexWrap: "wrap" }}>
+          <div className="row" style={{ gap: 10, margin: "4px 0 14px", flexWrap: "wrap" }}>
             <div className="card" style={{ flex: 1, padding: "10px 14px", boxShadow: "none" }}>
               <div className="tiny muted">成本</div><div className="num" style={{ fontWeight: 700 }}>{NT(c)}</div>
             </div>
@@ -1118,6 +1177,24 @@ function PricingPage({ products, setProducts, defaultMargin }) {
             <div className="card" style={{ flex: 1, padding: "10px 14px", boxShadow: "none" }}>
               <div className="tiny muted">每件賺</div><div className="num" style={{ fontWeight: 700, color: "var(--good)" }}>{NT(profit)}</div>
             </div>
+          </div>
+
+          {/* 庫存數量 */}
+          <div className="field">
+            <label>{editId ? "目前庫存（進貨幾件）" : "進貨了幾件？（庫存數量）"}</label>
+            <div className="between">
+              <div className="stepper">
+                <button onClick={() => setStockQty(Math.max(0, stockQty - 1))}>−</button>
+                <span className="val">{stockQty}</span>
+                <button onClick={() => setStockQty(stockQty + 1)}>＋</button>
+              </div>
+              <div className="row" style={{ gap: 6 }}>
+                {[5, 10, 20].map((n) => (
+                  <button key={n} className="chip" style={{ padding: "7px 12px" }} onClick={() => setStockQty(n)}>{n}</button>
+                ))}
+              </div>
+            </div>
+            <div className="tiny muted" style={{ marginTop: 8, marginLeft: 2 }}>存好後會出現在「庫存」分頁，每賣出一件點一下圈圈就自動扣 1</div>
           </div>
           <div className="row" style={{ gap: 10 }}>
             {editId && (
@@ -1142,173 +1219,197 @@ window.PricingPage = PricingPage;
 
 <script type="text/babel" data-src="orders.jsx">
 /* ===========================================================
-   記帳頁：快速新增訂單 + 訂單明細列表
-   訂單 = { id, date, name, qty, price(售價/件), cost(成本/件), productId }
+   庫存頁：圈選賣出（每點一下扣 1 件、記一筆銷售）
+   訂單 order = { id, date, name, qty, price, cost, productId }
+   商品 product 多了 stock（庫存數量）
    =========================================================== */
 
-function OrdersPage({ orders, setOrders, products }) {
-  const [adding, setAdding] = useState(false);
+function InventoryPage({ products, setProducts, orders, setOrders }) {
+  const [toast, setToast] = useState(null);
+  const toastTimer = useRef(null);
+  const [pop, setPop] = useState(null);        // 剛點選的商品 id（打勾動畫）
+  const [restockId, setRestockId] = useState(null);
+  const [restockQty, setRestockQty] = useState(5);
 
-  // 新增表單狀態
-  const blank = { date: todayISO(), name: "", qty: 1, price: "", cost: "", productId: null };
-  const [form, setForm] = useState(blank);
+  const today = todayISO();
 
-  const openAdd = () => { setForm({ ...blank, date: todayISO() }); setAdding(true); };
+  // 各商品今天賣出件數
+  const soldToday = useMemo(() => {
+    const m = {};
+    orders.forEach((o) => { if (o.date === today && o.productId) m[o.productId] = (m[o.productId] || 0) + o.qty; });
+    return m;
+  }, [orders, today]);
 
-  const pickProduct = (p) => {
-    if (form.productId === p.id) {
-      setForm({ ...form, productId: null, name: "", price: "", cost: "" });
-    } else {
-      setForm({ ...form, productId: p.id, name: p.name, price: String(p.price), cost: String(p.cost) });
-    }
+  // 今天總計
+  const dayAgg = useMemo(() => {
+    let qty = 0, rev = 0, prof = 0;
+    orders.forEach((o) => { if (o.date === today) { qty += o.qty; rev += o.price * o.qty; prof += (o.price - o.cost) * o.qty; } });
+    return { qty, rev, prof };
+  }, [orders, today]);
+
+  const clearToast = () => { if (toastTimer.current) clearTimeout(toastTimer.current); };
+  useEffect(() => () => clearToast(), []);
+
+  // 賣出一件
+  const sellOne = (p) => {
+    if ((p.stock || 0) <= 0) return;
+    const order = { id: uid(), date: today, name: p.name, qty: 1, price: p.price, cost: p.cost, productId: p.id };
+    setOrders((prev) => [order, ...prev]);
+    setProducts((prev) => prev.map((x) => x.id === p.id ? { ...x, stock: Math.max(0, (x.stock || 0) - 1) } : x));
+    setPop(p.id);
+    setTimeout(() => setPop((cur) => cur === p.id ? null : cur), 450);
+    clearToast();
+    setToast({ orderId: order.id, productId: p.id, name: p.name, profit: p.price - p.cost });
+    toastTimer.current = setTimeout(() => setToast(null), 3600);
   };
 
-  const save = () => {
-    const price = Number(form.price) || 0;
-    const cost = Number(form.cost) || 0;
-    if (price <= 0 || !form.name.trim()) return;
-    const item = { id: uid(), date: form.date, name: form.name.trim(), qty: Math.max(1, form.qty), price, cost, productId: form.productId };
-    setOrders((prev) => [item, ...prev]);
-    setAdding(false);
+  // 復原一筆銷售（補回庫存）
+  const undoSale = (orderId, productId) => {
+    setOrders((prev) => prev.filter((o) => o.id !== orderId));
+    if (productId) setProducts((prev) => prev.map((x) => x.id === productId ? { ...x, stock: (x.stock || 0) + 1 } : x));
+    setToast(null); clearToast();
   };
 
-  const del = (id) => setOrders((prev) => prev.filter((o) => o.id !== id));
+  const doRestock = () => {
+    setProducts((prev) => prev.map((x) => x.id === restockId ? { ...x, stock: (x.stock || 0) + restockQty } : x));
+    setRestockId(null); setRestockQty(5);
+  };
 
-  // 依日期分組（新到舊）
-  const groups = useMemo(() => {
-    const map = {};
-    [...orders].sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id))
-      .forEach((o) => { (map[o.date] = map[o.date] || []).push(o); });
-    return Object.entries(map);
-  }, [orders]);
+  // 最近賣出（跨日，最多 8 筆）
+  const recent = useMemo(() =>
+    [...orders].sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id)).slice(0, 8),
+    [orders]);
 
-  const fp = Number(form.price) || 0, fc = Number(form.cost) || 0;
-  const lineProfit = (fp - fc) * Math.max(1, form.qty);
+  // 排序：有庫存的在前，售完沉底
+  const sorted = useMemo(() =>
+    [...products].sort((a, b) => ((b.stock || 0) > 0) - ((a.stock || 0) > 0)),
+    [products]);
+
+  if (products.length === 0) {
+    return (
+      <div className="card empty" style={{ marginTop: 16 }}>
+        <div className="em-ic">📦</div>
+        <p>庫存還是空的</p>
+        <p className="tiny">先到「定價」分頁把商品算好價格、填入進貨數量，<br />存成商品後就會出現在這裡</p>
+      </div>
+    );
+  }
 
   return (
     <div>
-      {/* 快速新增按鈕 */}
-      <button className="btn btn-primary btn-block fade-in" style={{ marginTop: 12, padding: "16px" }} onClick={openAdd}>
-        <Icon name="plus" size={20} /> 記一筆訂單
-      </button>
+      {/* 今日總計 */}
+      <div className="card fade-in" style={{ padding: 18, marginTop: 12, display: "flex", gap: 12 }}>
+        <Stat label="今天賣出" value={dayAgg.qty + " 件"} />
+        <div style={{ width: 1, background: "var(--line)" }} />
+        <Stat label="今日營收" value={NT(dayAgg.rev)} />
+        <div style={{ width: 1, background: "var(--line)" }} />
+        <Stat label="今日淨賺" value={NT(dayAgg.prof)} tone="good" />
+      </div>
 
-      {orders.length === 0 ? (
-        <div className="card empty" style={{ marginTop: 16 }}>
-          <div className="em-ic">🧾</div>
-          <p>還沒有訂單記錄</p>
-          <p className="tiny">每賣出一筆就記一下，月底自動幫你算淨利</p>
-        </div>
-      ) : (
-        groups.map(([date, list]) => {
-          const dayRev = list.reduce((s, o) => s + o.price * o.qty, 0);
-          const dayProfit = list.reduce((s, o) => s + (o.price - o.cost) * o.qty, 0);
+      <div className="section-title">
+        商品庫存 <span className="sub">點圈圈 ✓ 賣出一件</span>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {sorted.map((p) => {
+          const stock = p.stock || 0;
+          const out = stock <= 0;
+          const low = stock > 0 && stock <= 2;
+          const st = soldToday[p.id] || 0;
           return (
-            <div key={date}>
-              <div className="section-title" style={{ marginBottom: 8 }}>
-                <span>{fmtDateShort(date)} <span className="muted tiny" style={{ fontWeight: 400 }}>{weekdayTC(date)}</span></span>
-                <span className="sub num">營收 {NT(dayRev)} ・ 賺 <span style={{ color: "var(--good)", fontWeight: 600 }}>{NT(dayProfit)}</span></span>
+            <div key={p.id} className={"card inv-row" + (out ? " out" : "")}>
+              {/* 圈選賣出 */}
+              <button className={"sell-btn" + (out ? " sold" : "") + (pop === p.id ? " checked" : "")}
+                onClick={() => sellOne(p)} disabled={out} title={out ? "已售完" : "賣出一件"}>
+                {out ? <span className="lbl">售完</span> : (pop === p.id ? <Icon name="check" size={26} /> : <span className="dot" />)}
+              </button>
+
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 15.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.name}</div>
+                <div className="tiny muted num" style={{ marginTop: 2 }}>售 {NT(p.price)} ・ 賺 {NT(p.price - p.cost)}/件</div>
+                <div className="row" style={{ gap: 6, marginTop: 7 }}>
+                  {out ? <span className="badge sold-out">已售完</span>
+                    : low ? <span className="badge low">剩不多</span>
+                    : <span className="badge ok">有貨</span>}
+                  {st > 0 && <span className="tiny num" style={{ color: "var(--accent-deep)", fontWeight: 700 }}>今天 +{st}</span>}
+                  <button className="restock-pill" onClick={() => { setRestockId(p.id); setRestockQty(5); }}>
+                    <Icon name="restock" size={14} /> 補貨
+                  </button>
+                </div>
               </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
-                {list.map((o) => {
-                  const prof = (o.price - o.cost) * o.qty;
-                  return (
-                    <div key={o.id} className="card" style={{ padding: "13px 15px", display: "flex", alignItems: "center", gap: 12 }}>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontWeight: 700, fontSize: 15, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                          {o.name} {o.qty > 1 && <span className="muted num" style={{ fontWeight: 500, fontSize: 13 }}>×{o.qty}</span>}
-                        </div>
-                        <div className="tiny muted num">售 {NT(o.price)} ・ 成本 {NT(o.cost)}</div>
-                      </div>
-                      <div style={{ textAlign: "right" }}>
-                        <div className="num" style={{ fontWeight: 700 }}>{NT(o.price * o.qty)}</div>
-                        <div className="tiny num" style={{ color: prof >= 0 ? "var(--good)" : "var(--warn)" }}>{prof >= 0 ? "賺 " : "賠 "}{NT(Math.abs(prof))}</div>
-                      </div>
-                      <button onClick={() => del(o.id)}
-                        style={{ border: "none", background: "transparent", color: "var(--ink-faint)", cursor: "pointer", padding: 4 }}>
-                        <Icon name="trash" size={17} />
-                      </button>
-                    </div>
-                  );
-                })}
+
+              <div style={{ textAlign: "right", flexShrink: 0 }}>
+                <div className="stock-num" style={{ fontSize: 30, color: out ? "var(--warn)" : "var(--accent-deep)" }}>{stock}</div>
+                <div className="tiny muted">剩餘</div>
               </div>
             </div>
           );
-        })
+        })}
+      </div>
+
+      {/* 最近賣出 */}
+      {recent.length > 0 && (
+        <div>
+          <div className="section-title">最近賣出 <span className="sub">點 ↩ 可復原</span></div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {recent.map((o) => (
+              <div key={o.id} className="card" style={{ padding: "11px 14px", display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ color: "var(--good)" }}><Icon name="bag" size={18} /></span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, fontSize: 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{o.name}</div>
+                  <div className="tiny muted num">{fmtDateShort(o.date)} ・ 賺 {NT(o.price - o.cost)}</div>
+                </div>
+                <button onClick={() => undoSale(o.id, o.productId)}
+                  style={{ border: "1px solid var(--line)", background: "var(--surface)", borderRadius: 9, padding: "6px 10px", color: "var(--ink-soft)", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12.5, fontWeight: 700, fontFamily: "var(--font-body)" }}>
+                  <Icon name="undo" size={14} /> 復原
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
 
-      {/* 新增訂單 表單 */}
-      {adding && (
-        <Sheet title="記一筆訂單" onClose={() => setAdding(false)}>
-          {/* 從商品庫快選 */}
-          {products.length > 0 && (
+      {/* 賣出 toast（含復原） */}
+      {toast && (
+        <div className="toast">
+          <div className="t-txt">已賣出 {toast.name} ・ 賺 <span className="num">{NT(toast.profit)}</span></div>
+          <button onClick={() => undoSale(toast.orderId, toast.productId)}><Icon name="undo" size={15} /> 復原</button>
+        </div>
+      )}
+
+      {/* 補貨表單 */}
+      {restockId && (() => {
+        const p = products.find((x) => x.id === restockId);
+        if (!p) return null;
+        return (
+          <Sheet title={"補貨：" + p.name} onClose={() => setRestockId(null)}>
             <div className="field">
-              <label>從商品庫選（自動帶入售價、成本）</label>
-              <div className="chips">
-                {products.map((p) => (
-                  <button key={p.id} className={"chip" + (form.productId === p.id ? " active" : "")} onClick={() => pickProduct(p)}>
-                    {p.name}
-                  </button>
-                ))}
+              <label>這次進貨幾件？</label>
+              <div className="between">
+                <div className="stepper">
+                  <button onClick={() => setRestockQty(Math.max(1, restockQty - 1))}>−</button>
+                  <span className="val">{restockQty}</span>
+                  <button onClick={() => setRestockQty(restockQty + 1)}>＋</button>
+                </div>
+                <div className="row" style={{ gap: 6 }}>
+                  {[5, 10, 20].map((n) => (
+                    <button key={n} className="chip" style={{ padding: "7px 12px" }} onClick={() => setRestockQty(n)}>{n}</button>
+                  ))}
+                </div>
+              </div>
+              <div className="tiny muted" style={{ marginTop: 10, marginLeft: 2 }}>
+                目前庫存 {p.stock || 0} 件，補貨後變成 <span className="num" style={{ fontWeight: 700, color: "var(--accent-deep)" }}>{(p.stock || 0) + restockQty}</span> 件
               </div>
             </div>
-          )}
-
-          <div className="field">
-            <label>商品名稱</label>
-            <input className="plain" type="text" value={form.name}
-              placeholder={products.length ? "或手動輸入名稱" : "例：碎花洋裝"}
-              onChange={(e) => setForm({ ...form, name: e.target.value, productId: null })} />
-          </div>
-
-          <div className="row" style={{ gap: 12, alignItems: "flex-start" }}>
-            <div className="field" style={{ flex: 1 }}>
-              <label>售價 / 件</label>
-              <MoneyInput value={form.price} onChange={(v) => setForm({ ...form, price: v, productId: null })} placeholder="0" />
-            </div>
-            <div className="field" style={{ flex: 1 }}>
-              <label>進貨成本 / 件</label>
-              <MoneyInput value={form.cost} onChange={(v) => setForm({ ...form, cost: v, productId: null })} placeholder="0" />
-            </div>
-          </div>
-
-          <div className="row between" style={{ margin: "2px 0 16px" }}>
-            <div className="field" style={{ flex: 1, margin: 0 }}>
-              <label>數量</label>
-              <div className="stepper">
-                <button onClick={() => setForm({ ...form, qty: Math.max(1, form.qty - 1) })}>−</button>
-                <span className="val">{form.qty}</span>
-                <button onClick={() => setForm({ ...form, qty: form.qty + 1 })}>＋</button>
-              </div>
-            </div>
-            <div className="field" style={{ flex: 1, margin: 0 }}>
-              <label>日期</label>
-              <input className="plain" type="date" value={form.date}
-                onChange={(e) => setForm({ ...form, date: e.target.value })} />
-            </div>
-          </div>
-
-          {/* 即時利潤預覽 */}
-          <div className="card between" style={{ padding: "12px 16px", marginBottom: 16, boxShadow: "none", background: "var(--accent-tint)" }}>
-            <div>
-              <div className="tiny muted">這筆營收</div>
-              <div className="num" style={{ fontWeight: 700, fontSize: 18 }}>{NT(fp * Math.max(1, form.qty))}</div>
-            </div>
-            <div style={{ textAlign: "right" }}>
-              <div className="tiny muted">這筆淨賺</div>
-              <div className="num" style={{ fontWeight: 700, fontSize: 18, color: lineProfit >= 0 ? "var(--good)" : "var(--warn)" }}>{NT(lineProfit)}</div>
-            </div>
-          </div>
-
-          <button className="btn btn-primary btn-block" disabled={fp <= 0 || !form.name.trim()} onClick={save}>
-            儲存訂單
-          </button>
-        </Sheet>
-      )}
+            <button className="btn btn-primary btn-block" onClick={doRestock}>確認補貨</button>
+          </Sheet>
+        );
+      })()}
     </div>
   );
 }
 
-window.OrdersPage = OrdersPage;
+window.InventoryPage = InventoryPage;
 
 </script>
 
@@ -1489,7 +1590,7 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 
 const TABS = [
   { id: "price", label: "定價", icon: "price" },
-  { id: "orders", label: "記帳", icon: "book" },
+  { id: "orders", label: "庫存", icon: "box" },
   { id: "stats", label: "統計", icon: "chart" }
 ];
 
@@ -1513,7 +1614,7 @@ function App() {
   const thisMonth = ymOf(todayISO());
   const monthProfit = orders.reduce((s, o) => ymOf(o.date) === thisMonth ? s + (o.price - o.cost) * o.qty : s, 0);
 
-  const headTitle = { price: "定價小幫手", orders: "訂單記帳", stats: "營收統計" }[tab];
+  const headTitle = { price: "定價小幫手", orders: "庫存管理", stats: "營收統計" }[tab];
 
   return (
     <div className="app" style={appStyle}>
@@ -1530,7 +1631,7 @@ function App() {
 
       <div className="app-body" key={tab}>
         {tab === "price" && <PricingPage products={products} setProducts={setProducts} defaultMargin={t.defaultMargin} />}
-        {tab === "orders" && <OrdersPage orders={orders} setOrders={setOrders} products={products} />}
+        {tab === "orders" && <InventoryPage products={products} setProducts={setProducts} orders={orders} setOrders={setOrders} />}
         {tab === "stats" && <StatsPage orders={orders} />}
       </div>
 
