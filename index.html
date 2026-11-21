@@ -982,6 +982,18 @@ function usePersistentState(key, initial) {
   return [val, setVal];
 }
 
+function readInventory() {
+  const saved = store.get("products", []);
+  return Array.isArray(saved) ? { products: saved, purchases: [] } : saved;
+}
+
+function validPurchase(purchase) {
+  return purchase && ["id", "productId", "name", "variant", "date", "supplier"].every((key) =>
+    typeof purchase[key] === "string"
+  ) && Number.isSafeInteger(purchase.ordered) && purchase.ordered > 0 &&
+    Number.isSafeInteger(purchase.received) && purchase.received >= 0 && purchase.received <= purchase.ordered;
+}
+
 /* ---- 格式化 ---- */
 const fmt = (n) => {
   const r = Math.round(Number(n) || 0);
@@ -1200,7 +1212,7 @@ function BackupCard() {
   const fileRef = useRef(null);
   const [msg, setMsg] = useState(null); // { type:'ok'|'err', text }
 
-  const products = store.get("products", []);
+  const { products, purchases } = readInventory();
   const orders = store.get("orders", []);
   const customers = store.get("customers", []);
 
@@ -1208,8 +1220,8 @@ function BackupCard() {
 
   const doExport = () => {
     const payload = {
-      app: "iuaM", version: 2, exportedAt: new Date().toISOString(),
-      products: store.get("products", []),
+      app: "iuaM", version: 3, exportedAt: new Date().toISOString(),
+      ...readInventory(),
       orders: store.get("orders", []),
       customers: store.get("customers", [])
     };
@@ -1232,6 +1244,7 @@ function BackupCard() {
       try {
         const data = JSON.parse(ev.target.result);
         if (!data || !Array.isArray(data.products) || !Array.isArray(data.orders) ||
+            (data.purchases !== undefined && (!Array.isArray(data.purchases) || !data.purchases.every(validPurchase))) ||
             (data.customers !== undefined && (!Array.isArray(data.customers) || !data.customers.every((customer) =>
               customer && typeof customer.id === "string" && typeof customer.name === "string" &&
               ["phone", "line", "notes"].every((key) => customer[key] === undefined || typeof customer[key] === "string")
@@ -1240,10 +1253,10 @@ function BackupCard() {
           return;
         }
         const ok = window.confirm(
-          "確定要還原這個備份嗎？\n\n備份內容：商品 " + data.products.length + " 件、訂單 " + data.orders.length + " 筆、客戶 " + (data.customers || []).length + " 位。\n\n⚠️ 這會「覆蓋」你目前的資料。"
+          "確定要還原這個備份嗎？\n\n備份內容：商品 " + data.products.length + " 件、訂單 " + data.orders.length + " 筆、客戶 " + (data.customers || []).length + " 位、叫貨 " + (data.purchases || []).length + " 筆。\n\n⚠️ 這會「覆蓋」你目前的資料。"
         );
         if (!ok) return;
-        store.set("products", data.products);
+        store.set("products", { products: data.products, purchases: data.purchases || [] });
         store.set("orders", data.orders);
         store.set("customers", data.customers || []);
         flash("ok", "還原成功，正在重新整理…");
@@ -1265,7 +1278,7 @@ function BackupCard() {
           <span style={{ color: "var(--accent-deep)" }}><Icon name="shield" size={20} /></span>
           <div>
             <div style={{ fontWeight: 700, fontSize: 14.5 }}>目前資料</div>
-            <div className="tiny muted num">商品 {products.length} 件 ・ 訂單 {orders.length} 筆 ・ 客戶 {customers.length} 位</div>
+            <div className="tiny muted num">商品 {products.length} 件 ・ 訂單 {orders.length} 筆 ・ 客戶 {customers.length} 位 ・ 叫貨 {purchases.length} 筆</div>
           </div>
         </div>
 
@@ -1288,7 +1301,7 @@ function BackupCard() {
         )}
 
         <div className="tiny muted" style={{ marginTop: 12, lineHeight: 1.6 }}>
-          匯出會把所有商品、訂單與客戶資料存成一個檔案到你的手機。換手機或重灌時，用「匯入還原」選那個檔案就能救回來。
+          備份包含商品、銷售訂單、客戶與叫貨資料。換手機時，可用「匯入還原」載入備份。
         </div>
       </div>
     </div>
@@ -1314,7 +1327,7 @@ function marginFromPrice(cost, price) {
   return ((price - cost) / price) * 100;
 }
 
-function PricingPage({ products, setProducts, defaultMargin, tags, setTags }) {
+function PricingPage({ products, setProducts, defaultMargin, tags, setTags, purchases = [] }) {
   const [shareProduct, setShareProduct] = useState(null);
   const [cost, setCost] = useState("");
   const [price, setPrice] = useState("");
@@ -1329,6 +1342,7 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags }) {
   const [imgBusy, setImgBusy] = useState(false);
   const [editId, setEditId] = useState(null);
   const [managingTags, setManagingTags] = useState(false);
+  const hasPendingPurchase = purchases.some((p) => p.productId === editId && p.received < p.ordered);
 
   // 標籤（三組：商品名稱 / 顏色 / 尺寸）
   const T = { name: (tags && tags.name) || [], color: (tags && tags.color) || [], size: (tags && tags.size) || [] };
@@ -1606,9 +1620,10 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags }) {
             <div className="tiny muted" style={{ marginTop: 8, marginLeft: 2 }}>存好後會出現在「庫存」分頁，每賣出一件點一下圈圈就自動扣 1</div>
           </div>
           {savedVariant && <p className="tiny muted" role="status">已加入 {savedVariant}，請填下一款的顏色／尺寸和庫存。</p>}
+          {hasPendingPurchase && <p className="tiny muted">這款商品仍有待到貨數量，到齊後才能刪除。</p>}
           <div className="row sale-actions" style={{ gap: 10 }}>
             {editId && (
-              <button className="btn btn-ghost" style={{ color: "var(--warn)" }}
+              <button className="btn btn-ghost" style={{ color: "var(--warn)" }} disabled={hasPendingPurchase} aria-label="刪除商品"
                 onClick={() => { setProducts((prev) => prev.filter((x) => x.id !== editId)); setSaving(false); reset(); }}>
                 <Icon name="trash" size={18} />
               </button>
@@ -2242,6 +2257,201 @@ window.InventoryPage = InventoryPage;
 
 </script>
 
+<script type="text/babel" data-src="purchases.jsx">
+function receivePurchase(inventory, id, previouslyReceived, amount) {
+  const purchase = inventory.purchases.find((entry) => entry.id === id);
+  if (!purchase || purchase.received !== previouslyReceived ||
+      !Number.isSafeInteger(amount) || amount < 1 || amount > purchase.ordered - purchase.received ||
+      !inventory.products.some((product) => product.id === purchase.productId)) return inventory;
+
+  return {
+    products: inventory.products.map((product) => product.id === purchase.productId
+      ? { ...product, stock: (Number(product.stock) || 0) + amount } : product),
+    purchases: inventory.purchases.map((entry) => entry.id === id
+      ? { ...entry, received: entry.received + amount } : entry)
+  };
+}
+
+function PurchaseForm({ products, onSave, onClose }) {
+  const [productId, setProductId] = useState("");
+  const [name, setName] = useState("");
+  const [variant, setVariant] = useState("");
+  const [cost, setCost] = useState("");
+  const [price, setPrice] = useState("");
+  const [quantity, setQuantity] = useState("1");
+  const [supplier, setSupplier] = useState("");
+  const isNew = productId === "new";
+  const existing = products.find((product) => product.id === productId);
+  const matchingProduct = isNew && products.find((product) =>
+    product.name === name.trim() && (product.variant || "") === variant.trim());
+  const validQuantity = Number.isSafeInteger(Number(quantity)) && Number(quantity) > 0;
+  const validProduct = existing || (isNew && name.trim() && !matchingProduct &&
+    Number.isFinite(Number(cost)) && cost !== "" && Number(cost) >= 0 &&
+    Number.isFinite(Number(price)) && Number(price) > 0);
+
+  const submit = (event) => {
+    event.preventDefault();
+    if (!validQuantity || !validProduct) return;
+    const product = existing || {
+      id: uid(), name: name.trim(), variant: variant.trim(), stock: 0,
+      cost: Number(cost), price: Number(price),
+      margin: Math.round(marginFromPrice(Number(cost), Number(price))), img: null
+    };
+    onSave({
+      id: uid(), productId: product.id, name: product.name, variant: product.variant || "",
+      supplier: supplier.trim(), date: todayISO(), ordered: Number(quantity), received: 0
+    }, existing ? null : product);
+  };
+
+  return (
+    <Sheet title="新增叫貨" onClose={onClose}>
+      <form onSubmit={submit}>
+        <div className="field">
+          <label htmlFor="purchase-product">商品／款式</label>
+          <select id="purchase-product" className="contact-field" value={productId} onChange={(event) => setProductId(event.target.value)} required>
+            <option value="">請選擇商品或新增款式</option>
+            <option value="new">＋ 新增商品／款式</option>
+            {products.map((product) => (
+              <option key={product.id} value={product.id}>
+                {product.name}{product.variant ? " ・ " + product.variant : ""}（庫存 {product.stock || 0}）
+              </option>
+            ))}
+          </select>
+        </div>
+        {isNew && <>
+          <div className="field">
+            <label htmlFor="purchase-name">商品名稱</label>
+            <input id="purchase-name" className="contact-field" value={name} onChange={(event) => setName(event.target.value)} required />
+          </div>
+          <div className="field">
+            <label htmlFor="purchase-variant">顏色／尺寸（選填）</label>
+            <input id="purchase-variant" className="contact-field" value={variant} onChange={(event) => setVariant(event.target.value)} />
+            {matchingProduct && <p className="tiny muted">已有同名款式，請從商品清單選取。</p>}
+          </div>
+          <div className="row" style={{ gap: 10 }}>
+            <div className="field" style={{ flex: 1, minWidth: 0 }}>
+              <label htmlFor="purchase-cost">每件成本</label>
+              <input id="purchase-cost" className="contact-field" type="number" inputMode="decimal" min="0" step="any"
+                value={cost} onChange={(event) => setCost(event.target.value)} required />
+            </div>
+            <div className="field" style={{ flex: 1, minWidth: 0 }}>
+              <label htmlFor="purchase-price">每件售價</label>
+              <input id="purchase-price" className="contact-field" type="number" inputMode="decimal" min="0" step="any"
+                value={price} onChange={(event) => setPrice(event.target.value)} required />
+            </div>
+          </div>
+        </>}
+        <div className="field">
+          <label htmlFor="purchase-quantity">叫貨件數</label>
+          <input id="purchase-quantity" className="contact-field" type="number" inputMode="numeric" min="1" step="1"
+            value={quantity} onChange={(event) => setQuantity(event.target.value)} required />
+        </div>
+        <div className="field">
+          <label htmlFor="purchase-supplier">供應商或單號（選填）</label>
+          <input id="purchase-supplier" className="contact-field" value={supplier} onChange={(event) => setSupplier(event.target.value)} />
+        </div>
+        <button className="btn btn-primary btn-block" disabled={!validQuantity || !validProduct}>儲存叫貨</button>
+        <button type="button" className="btn btn-block" onClick={onClose}>取消</button>
+      </form>
+    </Sheet>
+  );
+}
+
+function ReceivePurchaseForm({ purchase, onReceive, onClose }) {
+  const [quantity, setQuantity] = useState("");
+  const remaining = purchase.ordered - purchase.received;
+  const amount = Number(quantity);
+  const valid = Number.isSafeInteger(amount) && amount > 0 && amount <= remaining;
+  return (
+    <Sheet title={"收貨 " + purchase.name + (purchase.variant ? " ・ " + purchase.variant : "")} onClose={onClose}>
+      <form onSubmit={(event) => {
+        event.preventDefault();
+        if (valid) onReceive(purchase.id, purchase.received, amount);
+      }}>
+        <div className="field">
+          <label htmlFor="received-quantity">本次到貨件數（待到 {remaining} 件）</label>
+          <input id="received-quantity" className="contact-field" type="number" inputMode="numeric" min="1" max={remaining} step="1"
+            value={quantity} onChange={(event) => setQuantity(event.target.value)} required />
+        </div>
+        <button className="btn btn-primary btn-block" disabled={!valid}>確認入庫</button>
+        <button type="button" className="btn btn-block" onClick={onClose}>取消</button>
+      </form>
+    </Sheet>
+  );
+}
+
+function PurchasesPage({ inventory, setInventory }) {
+  const [query, setQuery] = useState("");
+  const [pendingOnly, setPendingOnly] = useState(true);
+  const [adding, setAdding] = useState(false);
+  const [receiveId, setReceiveId] = useState(null);
+  const { products, purchases } = inventory;
+  const pending = purchases.filter((purchase) => purchase.received < purchase.ordered);
+  const selected = pending.find((purchase) => purchase.id === receiveId);
+  const keyword = query.trim().toLowerCase();
+  const visible = (pendingOnly ? pending : purchases).filter((purchase) =>
+    [purchase.name, purchase.variant, purchase.supplier].some((text) => text.toLowerCase().includes(keyword)));
+
+  return (
+    <div>
+      <div className="card customer-card between" style={{ marginTop: 12 }}>
+        <strong>{pending.length} 筆待到貨</strong>
+        <span className="num">共 {pending.reduce((sum, purchase) => sum + purchase.ordered - purchase.received, 0)} 件</span>
+      </div>
+      <button className="btn btn-primary btn-block" style={{ marginTop: 12 }} onClick={() => setAdding(true)}>＋ 新增叫貨</button>
+      <div className="searchbar">
+        <Icon name="search" size={19} />
+        <input type="search" aria-label="搜尋叫貨" placeholder="搜尋商品、顏色、供應商或單號" value={query} onChange={(event) => setQuery(event.target.value)} />
+      </div>
+      <div className="section-title between">
+        <span>叫貨紀錄</span>
+        <label className="margin-toggle tiny"><input type="checkbox" checked={pendingOnly} onChange={(event) => setPendingOnly(event.target.checked)} />只看待到貨</label>
+      </div>
+      <div className="customer-list">
+        {visible.length === 0 && <p className="card customer-card muted">{query ? "找不到符合的紀錄" : pendingOnly ? "目前沒有待到貨的商品" : "還沒有叫貨紀錄"}</p>}
+        {visible.map((purchase) => {
+          const remaining = purchase.ordered - purchase.received;
+          const productExists = products.some((product) => product.id === purchase.productId);
+          return (
+            <div className="card customer-card" key={purchase.id}>
+              <div className="between">
+                <strong>{purchase.name}{purchase.variant ? " ・ " + purchase.variant : ""}</strong>
+                <span className={"badge " + (remaining ? "low" : "ok")}>{remaining ? "待到 " + remaining + " 件" : "已到齊"}</span>
+              </div>
+              <div className="tiny muted">{purchase.date}{purchase.supplier ? " ・ " + purchase.supplier : ""}</div>
+              <div className="between" style={{ marginTop: 8 }}>
+                <span className="tiny num">叫貨 {purchase.ordered} 件 ・ 已到 {purchase.received} 件</span>
+                {remaining > 0 && <button className="restock-pill" disabled={!productExists}
+                  onClick={() => setReceiveId(purchase.id)}>{productExists ? "登記到貨" : "商品已移除"}</button>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {adding && <PurchaseForm products={products} onClose={() => setAdding(false)} onSave={(purchase, product) => {
+        setInventory((current) => {
+          if (current.purchases.some((entry) => entry.id === purchase.id)) return current;
+          if (!product && !current.products.some((item) => item.id === purchase.productId)) return current;
+          return {
+            products: product ? [product, ...current.products] : current.products,
+            purchases: [purchase, ...current.purchases]
+          };
+        });
+        setAdding(false);
+        setQuery("");
+      }} />}
+      {selected && <ReceivePurchaseForm key={selected.id} purchase={selected} onClose={() => setReceiveId(null)}
+        onReceive={(id, previouslyReceived, amount) => {
+          setInventory((current) => receivePurchase(current, id, previouslyReceived, amount));
+          setReceiveId(null);
+        }} />}
+    </div>
+  );
+}
+
+window.PurchasesPage = PurchasesPage;
+</script>
+
 <script type="text/babel" data-src="stats.jsx">
 /* ===========================================================
    統計頁：每月營收 / 成本 / 淨利 + 趨勢圖 + 熱賣商品
@@ -2421,17 +2631,23 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 
 const TABS = [
   { id: "price", label: "定價", icon: "price" },
+  { id: "purchases", label: "進貨", icon: "restock" },
   { id: "orders", label: "庫存", icon: "box" },
   { id: "customers", label: "客戶", icon: "book" },
   { id: "stats", label: "統計", icon: "chart" }
 ];
 
-const APP_VERSION = "V3.3";
+const APP_VERSION = "V3.4";
 
 function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
   const [tab, setTab] = usePersistentState("tab", "price");
-  const [products, setProducts] = usePersistentState("products", []);
+  const [inventory, setInventory] = useState(readInventory);
+  const { products, purchases } = inventory;
+  useEffect(() => { store.set("products", inventory); }, [inventory]);
+  const setProducts = (update) => setInventory((current) => ({
+    ...current, products: update(current.products)
+  }));
   const [orders, setOrders] = usePersistentState("orders", []);
   const [customers, setCustomers] = usePersistentState("customers", []);
   const saveCustomer = (customer) => setCustomers((prev) =>
@@ -2487,7 +2703,7 @@ function App() {
   const thisMonth = ymOf(todayISO());
   const monthProfit = orders.reduce((s, o) => ymOf(o.date) === thisMonth ? s + (o.price - o.cost) * o.qty : s, 0);
 
-  const headTitle = { price: "定價小幫手", orders: "庫存管理", customers: "客戶管理", stats: "營收統計" }[tab];
+  const headTitle = { price: "定價小幫手", purchases: "進貨", orders: "庫存管理", customers: "客戶管理", stats: "營收統計" }[tab];
 
   return (
     <div className="app" style={appStyle}>
@@ -2503,7 +2719,8 @@ function App() {
       </div>
 
       <div className="app-body" key={tab}>
-        {tab === "price" && <PricingPage products={products} setProducts={setProducts} defaultMargin={t.defaultMargin} tags={tags} setTags={setTags} />}
+        {tab === "price" && <PricingPage products={products} setProducts={setProducts} defaultMargin={t.defaultMargin} tags={tags} setTags={setTags} purchases={purchases} />}
+        {tab === "purchases" && <PurchasesPage inventory={inventory} setInventory={setInventory} />}
         {tab === "orders" && <InventoryPage products={products} setProducts={setProducts} orders={orders} setOrders={setOrders} customers={customers} onSaveCustomer={saveCustomer} />}
         {tab === "customers" && <CustomersPage customers={customers} orders={orders} onSave={saveCustomer} />}
         {tab === "stats" && <StatsPage orders={orders} />}
