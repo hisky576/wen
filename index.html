@@ -1315,6 +1315,7 @@ function marginFromPrice(cost, price) {
 }
 
 function PricingPage({ products, setProducts, defaultMargin, tags, setTags }) {
+  const [shareProduct, setShareProduct] = useState(null);
   const [cost, setCost] = useState("");
   const [price, setPrice] = useState("");
   const [margin, setMargin] = useState(defaultMargin);
@@ -1472,7 +1473,7 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags }) {
 
       {/* 商品庫 */}
       <div className="section-title">
-        我的商品 <span className="sub">{products.length} 件</span>
+        進貨紀錄 <span className="sub">{products.length} 件</span>
       </div>
 
       {products.length === 0 ? (
@@ -1495,7 +1496,11 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags }) {
                   <span style={{ color: "var(--ink-faint)" }}>・</span>
                   <span style={{ fontWeight: 700, color: (p.stock || 0) > 0 ? "var(--accent-deep)" : "var(--warn)" }}>庫存 {p.stock || 0}</span>
                 </div>
-                <button className="restock-pill" style={{ marginTop: 5 }} onClick={() => addVariant(p)}>新增顏色／尺寸</button>
+                <div className="row sale-actions" style={{ gap: 6, marginTop: 5 }}>
+                  <button className="restock-pill" onClick={() => addVariant(p)}>新增顏色／尺寸</button>
+                  <button className="restock-pill" aria-label={"分享 " + p.name + (p.variant ? " " + p.variant : "")}
+                    onClick={() => setShareProduct(p)}>分享</button>
+                </div>
               </div>
               <div style={{ textAlign: "right" }}>
                 <div className="num" style={{ fontWeight: 700, color: "var(--accent-deep)" }}>{NT(p.price)}</div>
@@ -1509,6 +1514,8 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags }) {
           ))}
         </div>
       )}
+
+      {shareProduct && <ProductShareSheet product={shareProduct} onClose={() => setShareProduct(null)} />}
 
       {/* 命名 / 編輯 表單 */}
       {saving && (
@@ -1665,6 +1672,69 @@ function TagManager({ tags, onAdd, onRemove, onClose }) {
         </div>
       ))}
       <button className="btn btn-primary btn-block" style={{ marginTop: 6 }} onClick={onClose}>完成</button>
+    </Sheet>
+  );
+}
+
+function ProductShareSheet({ product, onClose }) {
+  const [status, setStatus] = useState("");
+  const [sharing, setSharing] = useState(false);
+  const captionRef = useRef(null);
+  const caption = [product.name, product.variant, "售價 " + NT(product.price)].filter(Boolean).join("\n");
+  const photo = typeof product.img === "string" && /^data:image\/jpeg;base64,[A-Za-z0-9+/]+=*$/.test(product.img)
+    ? product.img : null;
+  const lineUrl = "https://line.me/R/share?text=" + encodeURIComponent(caption);
+
+  const copyCaption = async () => {
+    try {
+      await navigator.clipboard.writeText(caption);
+      setStatus("已複製商品文案");
+    } catch {
+      captionRef.current?.focus();
+      captionRef.current?.select();
+      setStatus("請手動複製已選取的文案。");
+    }
+  };
+
+  const sharePhoto = async () => {
+    setStatus("");
+    setSharing(true);
+    try {
+      const bytes = Uint8Array.from(atob(photo.slice(photo.indexOf(",") + 1)), (character) => character.charCodeAt(0));
+      const files = [new File([bytes], "商品照片.jpg", { type: "image/jpeg" })];
+      if (!navigator.canShare?.({ files })) {
+        setStatus("此瀏覽器無法直接分享照片。請下載照片，再到 IG 或 LINE 選取。");
+        return;
+      }
+      await navigator.share({ files, text: caption });
+    } catch (error) {
+      if (error.name !== "AbortError") setStatus("無法開啟分享。請下載照片，再到 IG 或 LINE 選取。");
+    } finally {
+      setSharing(false);
+    }
+  };
+
+  return (
+    <Sheet title="分享商品" onClose={onClose}>
+      {photo && <img src={photo} alt={product.name} style={{ display: "block", maxWidth: "100%",
+        maxHeight: 180, borderRadius: 12, margin: "0 auto 12px", objectFit: "contain" }} />}
+      <div className="field">
+        <label htmlFor="share-caption">商品文案</label>
+        <textarea id="share-caption" className="contact-field" ref={captionRef} readOnly value={caption} rows={3} />
+      </div>
+      <div className="customer-list">
+        <a className="btn btn-primary btn-block" href={lineUrl} target="_blank" rel="noopener noreferrer"
+          style={{ textDecoration: "none", boxSizing: "border-box" }}>分享到 LINE（文字）</a>
+        {photo && typeof navigator.share === "function" && (
+          <button className="btn btn-ghost btn-block" disabled={sharing} onClick={sharePhoto}>分享照片到 IG／LINE</button>
+        )}
+        <button className="btn btn-ghost btn-block" onClick={copyCaption}>複製文案</button>
+        {photo && <a className="btn btn-ghost btn-block" href={photo} download="商品照片.jpg"
+          style={{ textDecoration: "none", boxSizing: "border-box" }}>下載商品照片</a>}
+      </div>
+      {photo && <p className="tiny muted">分享選單有顯示 Instagram 時可直接選取，也可下載照片後到 IG 發文並貼上文案。</p>}
+      {status && <p className="tiny" role="status">{status}</p>}
+      <button className="btn btn-block" onClick={onClose}>關閉</button>
     </Sheet>
   );
 }
@@ -2356,7 +2426,7 @@ const TABS = [
   { id: "stats", label: "統計", icon: "chart" }
 ];
 
-const APP_VERSION = "V3.2";
+const APP_VERSION = "V3.3";
 
 function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
