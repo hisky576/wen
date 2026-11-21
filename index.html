@@ -79,7 +79,8 @@ body {
 .app {
   width: 100%;
   max-width: 440px;
-  min-height: 100dvh;
+  height: 100vh;
+  height: 100dvh;
   background: var(--app-bg);
   position: relative;
   display: flex;
@@ -88,7 +89,7 @@ body {
   overflow: hidden;
 }
 @media (min-width: 480px) {
-  .app { min-height: min(900px, 100dvh); margin: auto; border-radius: 34px; }
+  .app { height: min(900px, 100dvh); margin: auto; border-radius: 34px; }
   body { padding: 24px 0; align-items: center; }
 }
 
@@ -119,8 +120,9 @@ body {
 /* ---- Scroll area ---- */
 .app-body {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  padding: 4px 18px 120px;
+  padding: 4px 18px calc(120px + var(--kb, 0px));
   -webkit-overflow-scrolling: touch;
 }
 
@@ -1045,8 +1047,9 @@ function MoneyInput({ value, onChange, placeholder, prefix = "NT$", suffix, auto
     <div className="input-wrap">
       {prefix && <span className="prefix">{prefix}</span>}
       <input
-        type="number" inputMode="decimal" value={value} placeholder={placeholder}
+        type="number" inputMode="decimal" enterKeyHint="done" value={value} placeholder={placeholder}
         autoFocus={autoFocus}
+        onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
         onChange={(e) => onChange(e.target.value)} />
       {suffix && <span className="suffix">{suffix}</span>}
     </div>
@@ -1377,7 +1380,7 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags }) {
 
         <div className="field">
           <label>進貨成本（每件批發價）</label>
-          <MoneyInput value={cost} onChange={onCost} placeholder="一件進貨多少錢" autoFocus />
+          <MoneyInput value={cost} onChange={onCost} placeholder="一件進貨多少錢" />
         </div>
 
         <div className="field" style={{ marginBottom: 14 }}>
@@ -2077,6 +2080,8 @@ const TABS = [
   { id: "stats", label: "統計", icon: "chart" }
 ];
 
+const APP_VERSION = "V1";
+
 function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
   const [tab, setTab] = usePersistentState("tab", "price");
@@ -2088,12 +2093,40 @@ function App() {
   // 讓任何縮圖都能呼叫放大檢視
   useEffect(() => { window.openImageViewer = setLightbox; return () => { delete window.openImageViewer; }; }, []);
 
+  // 手機數字鍵盤沒有「完成」鍵：補一顆浮動按鈕收鍵盤，並把內容墊高讓按鈕能捲到鍵盤上方
+  const [kb, setKb] = useState(0);
+  useEffect(() => {
+    const vv = window.visualViewport;
+    const isField = (el) => !!el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) && !["range", "checkbox", "radio", "file", "button"].includes(el.type);
+    const update = () => {
+      if (!isField(document.activeElement) || !vv) { setKb(0); return; }
+      const h = Math.round(window.innerHeight - vv.height - vv.offsetTop);
+      setKb(h > 80 ? h : 0);
+    };
+    const onOut = () => setTimeout(update, 60);
+    const onDown = (e) => {
+      const a = document.activeElement;
+      if (isField(a) && !(e.target.closest && e.target.closest("input,textarea,select,button,a,label"))) a.blur();
+    };
+    document.addEventListener("focusin", update);
+    document.addEventListener("focusout", onOut);
+    document.addEventListener("pointerdown", onDown);
+    if (vv) { vv.addEventListener("resize", update); vv.addEventListener("scroll", update); }
+    return () => {
+      document.removeEventListener("focusin", update);
+      document.removeEventListener("focusout", onOut);
+      document.removeEventListener("pointerdown", onDown);
+      if (vv) { vv.removeEventListener("resize", update); vv.removeEventListener("scroll", update); }
+    };
+  }, []);
+  const dismissKb = () => { const a = document.activeElement; if (a && a.blur) a.blur(); setKb(0); };
+
   // 套用主題色
   const theme = THEMES[t.theme] || THEMES["奶茶"];
   const appStyle = {
     "--accent": theme.accent, "--accent-deep": theme.deep,
     "--accent-soft": theme.soft, "--accent-tint": theme.tint,
-    "--bg": theme.bg, "--app-bg": theme.app,
+    "--bg": theme.bg, "--app-bg": theme.app, "--kb": kb + "px",
     "--font-head": t.serifTitle ? '"Noto Serif TC", serif' : '"Noto Sans TC", sans-serif'
   };
   useEffect(() => { document.body.style.background = theme.bg; }, [theme.bg]);
@@ -2108,7 +2141,7 @@ function App() {
     <div className="app" style={appStyle}>
       <div className="app-header">
         <div>
-          <div className="greet">iuaM ・ 衣服小生意</div>
+          <div className="greet">iuaM ・ 衣服小生意 <span style={{ marginLeft: 4, padding: "1px 8px", borderRadius: 99, background: "var(--accent-soft)", color: "var(--accent-deep)", fontWeight: 700, fontSize: 11, letterSpacing: ".02em" }}>{APP_VERSION}</span></div>
           <h1>{headTitle}</h1>
         </div>
         <button className="month-pill" onClick={() => setTab("stats")} title="本月淨利">
@@ -2144,6 +2177,14 @@ function App() {
       </TweaksPanel>
 
       <ImageViewer src={lightbox} onClose={() => setLightbox(null)} />
+
+      {kb > 0 && ReactDOM.createPortal(
+        <button onPointerDown={(e) => { e.preventDefault(); dismissKb(); }} onClick={dismissKb}
+          style={{ position: "fixed", right: 12, bottom: kb + 10, zIndex: 9999, border: "none", borderRadius: 999,
+            padding: "10px 20px", background: theme.accent, color: "#fff", fontSize: 15, fontWeight: 700,
+            fontFamily: '"Noto Sans TC", system-ui, sans-serif', boxShadow: "0 6px 18px -6px rgba(70,58,46,.55)" }}>
+          完成
+        </button>, document.body)}
     </div>
   );
 }
