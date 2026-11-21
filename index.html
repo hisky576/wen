@@ -1295,6 +1295,7 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags }) {
   const [cost, setCost] = useState("");
   const [price, setPrice] = useState("");
   const [margin, setMargin] = useState(defaultMargin);
+  const [useMargin, setUseMargin] = usePersistentState("useMargin", false); // 勾選才啟用「目標毛利率」連動
   const [saving, setSaving] = useState(false);
   const [name, setName] = useState("");
   const [variant, setVariant] = useState("");
@@ -1339,12 +1340,12 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags }) {
   const onCost = (v) => {
     setCost(v);
     const cc = Number(v) || 0;
-    if (cc > 0) setPrice(String(Math.round(priceFromMargin(cc, margin))));
+    if (useMargin && cc > 0) setPrice(String(Math.round(priceFromMargin(cc, margin))));
   };
   const onPrice = (v) => {
     setPrice(v);
     const pp = Number(v) || 0;
-    if (pp > 0) setCost(String(Math.round(pp * (1 - Math.min(margin, 95) / 100))));
+    if (useMargin && pp > 0) setCost(String(Math.round(pp * (1 - Math.min(margin, 95) / 100))));
   };
   const onMargin = (m) => {
     setMargin(m);
@@ -1352,6 +1353,14 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags }) {
     const pp = Number(price) || 0;
     if (cc > 0) setPrice(String(Math.round(priceFromMargin(cc, m))));
     else if (pp > 0) setCost(String(Math.round(pp * (1 - Math.min(m, 95) / 100))));
+  };
+
+  // 勾選／取消「目標毛利率」：勾選時若已有成本＋售價，沿用目前毛利率，不會蓋掉你自訂的售價
+  const onToggleMargin = (on) => {
+    setUseMargin(on);
+    if (!on) return;
+    if (c > 0 && pr > 0) setMargin(Math.round(Math.min(Math.max(marginFromPrice(c, pr), 5), 90)));
+    else if (c > 0) setPrice(String(Math.round(priceFromMargin(c, margin))));
   };
 
   const reset = () => { setCost(""); setPrice(""); setMargin(defaultMargin); setName(""); setVariant(""); setStockQty(1); setImg(null); setEditId(null); };
@@ -1378,7 +1387,7 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags }) {
           <span style={{ color: "var(--accent-deep)" }}><Icon name="spark" size={20} /></span>
           <span style={{ fontFamily: "var(--font-head)", fontWeight: 600, fontSize: 16 }}>定價小幫手</span>
         </div>
-        <div className="tiny muted" style={{ marginBottom: 16 }}>成本、售價任一邊輸入都會自動換算，毛利率拉桿是兩邊的連結</div>
+        <div className="tiny muted" style={{ marginBottom: 16 }}>{useMargin ? "成本、售價任一邊輸入都會自動換算，毛利率拉桿是兩邊的連結" : "售價可以自己訂；想讓售價依毛利率自動算，勾選下方「使用目標毛利率」"}</div>
 
         <div className="field">
           <label>進貨成本（每件批發價）</label>
@@ -1386,18 +1395,28 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags }) {
         </div>
 
         <div className="field" style={{ marginBottom: 14 }}>
-          <div className="between" style={{ marginBottom: 2 }}>
-            <label style={{ margin: 0 }}>目標毛利率</label>
-            <span className="num" style={{ fontWeight: 700, color: "var(--accent-deep)", fontSize: 17 }}>{Math.round(effMargin)}%</span>
+          <div className="between" style={{ marginBottom: useMargin ? 2 : 0 }}>
+            <label style={{ margin: 0, display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer", fontSize: 14, fontWeight: 600, color: "var(--ink)" }}>
+              <input type="checkbox" checked={useMargin} onChange={(e) => onToggleMargin(e.target.checked)}
+                style={{ width: 22, height: 22, margin: 0, accentColor: "var(--accent)", cursor: "pointer" }} />
+              使用目標毛利率
+            </label>
+            {useMargin
+              ? <span className="num" style={{ fontWeight: 700, color: "var(--accent-deep)", fontSize: 17 }}>{Math.round(effMargin)}%</span>
+              : (c > 0 && pr > 0) && <span className="tiny muted">目前毛利率 {Math.round(effMargin)}%</span>}
           </div>
-          <input className="range" type="range" min="5" max="90" step="1"
-            value={Math.round(Math.min(Math.max(effMargin, 5), 90))}
-            onChange={(e) => onMargin(Number(e.target.value))} />
-          <div className="between tiny muted"><span>薄利多銷</span><span>高單價</span></div>
+          {useMargin && (
+            <div>
+              <input className="range" type="range" min="5" max="90" step="1"
+                value={Math.round(Math.min(Math.max(effMargin, 5), 90))}
+                onChange={(e) => onMargin(Number(e.target.value))} />
+              <div className="between tiny muted"><span>薄利多銷</span><span>高單價</span></div>
+            </div>
+          )}
         </div>
 
         <div className="field" style={{ marginBottom: 0 }}>
-          <label>售價（可直接改，會反推成本）</label>
+          <label>{useMargin ? "售價（可直接改，會反推成本）" : "售價（自己決定）"}</label>
           <MoneyInput value={price} onChange={onPrice} placeholder="想賣多少錢" />
         </div>
       </div>
@@ -2082,7 +2101,7 @@ const TABS = [
   { id: "stats", label: "統計", icon: "chart" }
 ];
 
-const APP_VERSION = "V2";
+const APP_VERSION = "V3";
 
 function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
