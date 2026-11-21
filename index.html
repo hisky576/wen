@@ -168,6 +168,22 @@ body {
 .tab.active .ic { transform: translateY(-1px); }
 .tab svg { width: 23px; height: 23px; }
 
+.contact-field {
+  box-sizing: border-box; width: 100%; padding: 11px 12px; border: 1px solid var(--line);
+  border-radius: var(--radius-sm); background: var(--surface); color: var(--ink); font: inherit; font-size: 16px;
+}
+.contact-field:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.customer-list { display: grid; gap: 8px; margin-top: 12px; }
+.customer-card { padding: 13px 15px; overflow-wrap: anywhere; }
+.customer-card .between { gap: 10px; }
+.customer-link { display: grid; gap: 4px; width: 100%; text-align: left; color: var(--ink); font: inherit; cursor: pointer; }
+.customer-notes { white-space: pre-wrap; margin: 6px 0; }
+.sale-actions { flex-wrap: wrap; }
+.margin-toggle { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-weight: 600; }
+.margin-toggle input { width: 18px; height: 18px; accent-color: var(--accent-deep); }
+.group-actions { padding: 0 14px 12px; }
+.group-actions .btn { padding-block: 8px; }
+
 /* ---- Buttons ---- */
 .btn {
   font-family: var(--font-body); font-weight: 600; font-size: 15px;
@@ -1186,14 +1202,16 @@ function BackupCard() {
 
   const products = store.get("products", []);
   const orders = store.get("orders", []);
+  const customers = store.get("customers", []);
 
   const flash = (type, text) => { setMsg({ type, text }); setTimeout(() => setMsg(null), 4000); };
 
   const doExport = () => {
     const payload = {
-      app: "iuaM", version: 1, exportedAt: new Date().toISOString(),
+      app: "iuaM", version: 2, exportedAt: new Date().toISOString(),
       products: store.get("products", []),
-      orders: store.get("orders", [])
+      orders: store.get("orders", []),
+      customers: store.get("customers", [])
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -1213,16 +1231,21 @@ function BackupCard() {
     reader.onload = (ev) => {
       try {
         const data = JSON.parse(ev.target.result);
-        if (!data || !Array.isArray(data.products) || !Array.isArray(data.orders)) {
+        if (!data || !Array.isArray(data.products) || !Array.isArray(data.orders) ||
+            (data.customers !== undefined && (!Array.isArray(data.customers) || !data.customers.every((customer) =>
+              customer && typeof customer.id === "string" && typeof customer.name === "string" &&
+              ["phone", "line", "notes"].every((key) => customer[key] === undefined || typeof customer[key] === "string")
+            )))) {
           flash("err", "檔案格式不對，請選 iuaM 匯出的備份檔");
           return;
         }
         const ok = window.confirm(
-          "確定要還原這個備份嗎？\n\n備份內容：商品 " + data.products.length + " 件、訂單 " + data.orders.length + " 筆。\n\n⚠️ 這會「覆蓋」你目前的資料。"
+          "確定要還原這個備份嗎？\n\n備份內容：商品 " + data.products.length + " 件、訂單 " + data.orders.length + " 筆、客戶 " + (data.customers || []).length + " 位。\n\n⚠️ 這會「覆蓋」你目前的資料。"
         );
         if (!ok) return;
         store.set("products", data.products);
         store.set("orders", data.orders);
+        store.set("customers", data.customers || []);
         flash("ok", "還原成功，正在重新整理…");
         setTimeout(() => window.location.reload(), 700);
       } catch (err) {
@@ -1242,7 +1265,7 @@ function BackupCard() {
           <span style={{ color: "var(--accent-deep)" }}><Icon name="shield" size={20} /></span>
           <div>
             <div style={{ fontWeight: 700, fontSize: 14.5 }}>目前資料</div>
-            <div className="tiny muted num">商品 {products.length} 件 ・ 訂單 {orders.length} 筆</div>
+            <div className="tiny muted num">商品 {products.length} 件 ・ 訂單 {orders.length} 筆 ・ 客戶 {customers.length} 位</div>
           </div>
         </div>
 
@@ -1265,7 +1288,7 @@ function BackupCard() {
         )}
 
         <div className="tiny muted" style={{ marginTop: 12, lineHeight: 1.6 }}>
-          匯出會把所有商品與訂單存成一個檔案到你的手機。換手機或重灌時，用「匯入還原」選那個檔案就能救回來。
+          匯出會把所有商品、訂單與客戶資料存成一個檔案到你的手機。換手機或重灌時，用「匯入還原」選那個檔案就能救回來。
         </div>
       </div>
     </div>
@@ -1295,8 +1318,9 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags }) {
   const [cost, setCost] = useState("");
   const [price, setPrice] = useState("");
   const [margin, setMargin] = useState(defaultMargin);
-  const [useMargin, setUseMargin] = usePersistentState("useMargin", false); // 勾選才啟用「目標毛利率」連動
+  const [marginEnabled, setMarginEnabled] = usePersistentState("marginEnabled", true);
   const [saving, setSaving] = useState(false);
+  const [savedVariant, setSavedVariant] = useState(null);
   const [name, setName] = useState("");
   const [variant, setVariant] = useState("");
   const [stockQty, setStockQty] = useState(1);
@@ -1308,10 +1332,11 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags }) {
   // 標籤（三組：商品名稱 / 顏色 / 尺寸）
   const T = { name: (tags && tags.name) || [], color: (tags && tags.color) || [], size: (tags && tags.size) || [] };
   const variantTokens = variant.split(/\s+/).filter(Boolean);
-  const toggleToken = (token) => {
+  const toggleToken = (group, token) => {
     setVariant((v) => {
       const parts = v.split(/\s+/).filter(Boolean);
-      return parts.includes(token) ? parts.filter((p) => p !== token).join(" ") : [...parts, token].join(" ");
+      const otherParts = parts.filter((part) => !T[group].includes(part));
+      return (parts.includes(token) ? otherParts : [...otherParts, token]).join(" ");
     });
   };
   const addTag = (group, value) => {
@@ -1332,7 +1357,7 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags }) {
 
   const c = Number(cost) || 0;
   const pr = Number(price) || 0;
-  const effMargin = pr > 0 ? marginFromPrice(c, pr) : margin;
+  const effMargin = marginFromPrice(c, pr);
   const profit = pr - c;
   const markup = c > 0 ? pr / c : 0;
 
@@ -1340,12 +1365,12 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags }) {
   const onCost = (v) => {
     setCost(v);
     const cc = Number(v) || 0;
-    if (useMargin && cc > 0) setPrice(String(Math.round(priceFromMargin(cc, margin))));
+    if (marginEnabled && cc > 0) setPrice(String(Math.round(priceFromMargin(cc, margin))));
   };
   const onPrice = (v) => {
     setPrice(v);
     const pp = Number(v) || 0;
-    if (useMargin && pp > 0) setCost(String(Math.round(pp * (1 - Math.min(margin, 95) / 100))));
+    if (marginEnabled && pp > 0) setCost(String(Math.round(pp * (1 - Math.min(margin, 95) / 100))));
   };
   const onMargin = (m) => {
     setMargin(m);
@@ -1355,27 +1380,39 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags }) {
     else if (pp > 0) setCost(String(Math.round(pp * (1 - Math.min(m, 95) / 100))));
   };
 
-  // 勾選／取消「目標毛利率」：勾選時若已有成本＋售價，沿用目前毛利率，不會蓋掉你自訂的售價
-  const onToggleMargin = (on) => {
-    setUseMargin(on);
-    if (!on) return;
-    if (c > 0 && pr > 0) setMargin(Math.round(Math.min(Math.max(marginFromPrice(c, pr), 5), 90)));
-    else if (c > 0) setPrice(String(Math.round(priceFromMargin(c, margin))));
-  };
-
   const reset = () => { setCost(""); setPrice(""); setMargin(defaultMargin); setName(""); setVariant(""); setStockQty(1); setImg(null); setEditId(null); };
 
-  const saveProduct = () => {
+  const saveProduct = (keepAdding = false) => {
     if (c <= 0 || pr <= 0 || !name.trim()) return;
     const item = { id: editId || uid(), name: name.trim(), variant: variant.trim(), cost: c, price: pr, margin: Math.round(effMargin), stock: Math.max(0, stockQty), img: img || null };
     setProducts((prev) => editId ? prev.map((p) => p.id === editId ? item : p) : [item, ...prev]);
     addTag("name", name.trim()); // 自動把用過的名稱收進標籤
+    if (keepAdding) {
+      setSavedVariant(item.variant || item.name);
+      setVariant("");
+      setStockQty(1);
+      setImg(null);
+      return;
+    }
+    setSavedVariant(null);
     setSaving(false); reset();
   };
 
   const editProduct = (p) => {
-    setCost(String(p.cost)); setPrice(String(p.price)); setMargin(p.margin);
+    setCost(String(p.cost)); setPrice(String(p.price)); setMargin(Math.min(90, Math.max(5, p.margin ?? defaultMargin)));
     setName(p.name); setVariant(p.variant || ""); setStockQty(p.stock || 0); setImg(p.img || null); setEditId(p.id);
+    setSaving(true);
+  };
+
+  const addVariant = (p) => {
+    setCost(String(p.cost));
+    setPrice(String(p.price));
+    setMargin(Math.min(90, Math.max(5, p.margin ?? defaultMargin)));
+    setName(p.name);
+    setVariant("");
+    setStockQty(1);
+    setImg(p.img || null);
+    setEditId(null);
     setSaving(true);
   };
 
@@ -1387,7 +1424,7 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags }) {
           <span style={{ color: "var(--accent-deep)" }}><Icon name="spark" size={20} /></span>
           <span style={{ fontFamily: "var(--font-head)", fontWeight: 600, fontSize: 16 }}>定價小幫手</span>
         </div>
-        <div className="tiny muted" style={{ marginBottom: 16 }}>{useMargin ? "成本、售價任一邊輸入都會自動換算，毛利率拉桿是兩邊的連結" : "售價可以自己訂；想讓售價依毛利率自動算，勾選下方「使用目標毛利率」"}</div>
+        <div className="tiny muted" style={{ marginBottom: 16 }}>{marginEnabled ? "依目標毛利率自動換算成本與售價" : "手動輸入成本與售價"}</div>
 
         <div className="field">
           <label>進貨成本（每件批發價）</label>
@@ -1395,28 +1432,19 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags }) {
         </div>
 
         <div className="field" style={{ marginBottom: 14 }}>
-          <div className="between" style={{ marginBottom: useMargin ? 2 : 0 }}>
-            <label style={{ margin: 0, display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer", fontSize: 14, fontWeight: 600, color: "var(--ink)" }}>
-              <input type="checkbox" checked={useMargin} onChange={(e) => onToggleMargin(e.target.checked)}
-                style={{ width: 22, height: 22, margin: 0, accentColor: "var(--accent)", cursor: "pointer" }} />
-              使用目標毛利率
+          <div className="between" style={{ marginBottom: 2 }}>
+            <label className="margin-toggle">
+              <input type="checkbox" checked={marginEnabled} onChange={(e) => setMarginEnabled(e.target.checked)} />
+              啟用目標毛利率
             </label>
-            {useMargin
-              ? <span className="num" style={{ fontWeight: 700, color: "var(--accent-deep)", fontSize: 17 }}>{Math.round(effMargin)}%</span>
-              : (c > 0 && pr > 0) && <span className="tiny muted">目前毛利率 {Math.round(effMargin)}%</span>}
+            {marginEnabled && <span className="num" style={{ fontWeight: 700, color: "var(--accent-deep)", fontSize: 17 }}>{margin}%</span>}
           </div>
-          {useMargin && (
-            <div>
-              <input className="range" type="range" min="5" max="90" step="1"
-                value={Math.round(Math.min(Math.max(effMargin, 5), 90))}
-                onChange={(e) => onMargin(Number(e.target.value))} />
-              <div className="between tiny muted"><span>薄利多銷</span><span>高單價</span></div>
-            </div>
-          )}
+          {marginEnabled && <input className="range" type="range" min="5" max="90" step="1"
+            aria-label="目標毛利率" value={margin} onChange={(e) => onMargin(Number(e.target.value))} />}
         </div>
 
         <div className="field" style={{ marginBottom: 0 }}>
-          <label>{useMargin ? "售價（可直接改，會反推成本）" : "售價（自己決定）"}</label>
+          <label>{marginEnabled ? "售價（修改後會反推成本）" : "售價"}</label>
           <MoneyInput value={price} onChange={onPrice} placeholder="想賣多少錢" />
         </div>
       </div>
@@ -1467,6 +1495,7 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags }) {
                   <span style={{ color: "var(--ink-faint)" }}>・</span>
                   <span style={{ fontWeight: 700, color: (p.stock || 0) > 0 ? "var(--accent-deep)" : "var(--warn)" }}>庫存 {p.stock || 0}</span>
                 </div>
+                <button className="restock-pill" style={{ marginTop: 5 }} onClick={() => addVariant(p)}>新增顏色／尺寸</button>
               </div>
               <div style={{ textAlign: "right" }}>
                 <div className="num" style={{ fontWeight: 700, color: "var(--accent-deep)" }}>{NT(p.price)}</div>
@@ -1483,7 +1512,8 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags }) {
 
       {/* 命名 / 編輯 表單 */}
       {saving && (
-        <Sheet title={editId ? "編輯商品" : "存成商品"} onClose={() => { setSaving(false); if (!editId) setName(""); }}>
+        <Sheet title={editId ? "編輯商品" : savedVariant ? "繼續加入款式" : "存成商品"}
+          onClose={() => { setSaving(false); setSavedVariant(null); if (!editId) setName(""); }}>
           <div className="field">
             <label>商品名稱</label>
             <input className="plain" type="text" value={name} autoFocus
@@ -1501,7 +1531,7 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags }) {
 
           <div className="field">
             <div className="between" style={{ marginBottom: 7 }}>
-              <label style={{ margin: 0 }}>顏色 / 尺寸（選填）</label>
+              <label style={{ margin: 0 }}>顏色 / 尺寸（每款獨立）</label>
               <button onClick={() => setManagingTags(true)}
                 style={{ border: "none", background: "none", color: "var(--accent-deep)", fontSize: 12.5, fontWeight: 700, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4, fontFamily: "var(--font-body)" }}>
                 <Icon name="tag" size={14} /> 管理標籤
@@ -1516,7 +1546,7 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags }) {
                 <div className="chips">
                   {T.color.map((t) => (
                     <button key={t} className={"chip" + (variantTokens.includes(t) ? " active" : "")}
-                      style={{ padding: "7px 13px" }} onClick={() => toggleToken(t)}>{t}</button>
+                      style={{ padding: "7px 13px" }} onClick={() => toggleToken("color", t)}>{t}</button>
                   ))}
                 </div>
               </div>
@@ -1527,12 +1557,12 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags }) {
                 <div className="chips">
                   {T.size.map((t) => (
                     <button key={t} className={"chip" + (variantTokens.includes(t) ? " active" : "")}
-                      style={{ padding: "7px 13px" }} onClick={() => toggleToken(t)}>{t}</button>
+                      style={{ padding: "7px 13px" }} onClick={() => toggleToken("size", t)}>{t}</button>
                   ))}
                 </div>
               </div>
             )}
-            <div className="tiny muted" style={{ marginTop: 9, marginLeft: 2 }}>同名稱的商品在「庫存」會自動合併成一張卡，點開看各顏色／尺寸</div>
+            <div className="tiny muted" style={{ marginTop: 9, marginLeft: 2 }}>每次儲存一種顏色／尺寸並填寫該款的庫存。同名商品會合併顯示。</div>
           </div>
 
           <div className="field">
@@ -1568,14 +1598,18 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags }) {
             </div>
             <div className="tiny muted" style={{ marginTop: 8, marginLeft: 2 }}>存好後會出現在「庫存」分頁，每賣出一件點一下圈圈就自動扣 1</div>
           </div>
-          <div className="row" style={{ gap: 10 }}>
+          {savedVariant && <p className="tiny muted" role="status">已加入 {savedVariant}，請填下一款的顏色／尺寸和庫存。</p>}
+          <div className="row sale-actions" style={{ gap: 10 }}>
             {editId && (
               <button className="btn btn-ghost" style={{ color: "var(--warn)" }}
                 onClick={() => { setProducts((prev) => prev.filter((x) => x.id !== editId)); setSaving(false); reset(); }}>
                 <Icon name="trash" size={18} />
               </button>
             )}
-            <button className="btn btn-primary" style={{ flex: 1 }} disabled={!name.trim()} onClick={saveProduct}>
+            {!editId && <button className="btn btn-ghost" style={{ flex: 1 }} disabled={!name.trim()} onClick={() => saveProduct(true)}>
+              儲存並繼續加入
+            </button>}
+            <button className="btn btn-primary" style={{ flex: 1 }} disabled={!name.trim()} onClick={() => saveProduct()}>
               {editId ? "儲存變更" : "加入商品庫"}
             </button>
           </div>
@@ -1639,6 +1673,165 @@ window.PricingPage = PricingPage;
 
 </script>
 
+<script type="text/babel" data-src="customers.jsx">
+const customerFields = [
+  ["name", "姓名或暱稱", "text"],
+  ["phone", "電話", "tel"],
+  ["line", "LINE ID", "text"],
+  ["notes", "尺寸、偏好或備註", null]
+];
+
+function searchCustomers(customers, query) {
+  const keyword = query.trim().toLowerCase();
+  return customers.filter((customer) =>
+    [customer.name, customer.phone, customer.line].some((value) =>
+      (value || "").toLowerCase().includes(keyword)
+    )
+  );
+}
+
+function CustomerForm({ customer, onSave, onClose }) {
+  const [draft, setDraft] = useState(customer || { name: "", phone: "", line: "", notes: "" });
+  const submit = (event) => {
+    event.preventDefault();
+    if (!draft.name.trim()) return;
+    const contact = Object.fromEntries(customerFields.map(([key]) => [key, (draft[key] || "").trim()]));
+    onSave({ ...contact, id: customer ? customer.id : uid() });
+  };
+  return (
+    <Sheet title={customer ? "編輯客戶" : "新增客戶"} onClose={onClose}>
+      <form onSubmit={submit}>
+        {customerFields.map(([key, label, type]) => {
+          const props = {
+            id: "contact-" + key,
+            className: "contact-field",
+            value: draft[key] || "",
+            onChange: (event) => setDraft({ ...draft, [key]: event.target.value })
+          };
+          return (
+            <div className="field" key={key}>
+              <label htmlFor={props.id}>{label}{key === "name" ? "（必填）" : ""}</label>
+              {type ? <input {...props} type={type} required={key === "name"} /> : <textarea {...props} rows={3} />}
+            </div>
+          );
+        })}
+        <button className="btn btn-primary btn-block" disabled={!draft.name.trim()}>儲存客戶</button>
+        <button type="button" className="btn btn-block" onClick={onClose}>取消</button>
+      </form>
+    </Sheet>
+  );
+}
+
+function CustomerPicker({ title, customers, customerId, allowGuest, onChoose, onCreate, onClose }) {
+  const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState(customerId || "");
+  const [creating, setCreating] = useState(false);
+  const matches = searchCustomers(customers, query);
+  if (creating) {
+    return <CustomerForm onClose={() => setCreating(false)} onSave={(customer) => {
+      onCreate(customer);
+      setSelected(customer.id);
+      setQuery("");
+      setCreating(false);
+    }} />;
+  }
+  return (
+    <Sheet title={title} onClose={onClose}>
+      <div className="field">
+        <label htmlFor="buyer-search">搜尋客戶</label>
+        <input id="buyer-search" className="contact-field" placeholder="姓名、電話或 LINE ID" value={query} onChange={(event) => setQuery(event.target.value)} />
+      </div>
+      <div className="field">
+        <label htmlFor="buyer-choice">買家</label>
+        <select id="buyer-choice" className="contact-field" value={selected} onChange={(event) => setSelected(event.target.value)}>
+          <option value="">{allowGuest ? "未指定客戶" : "請選擇客戶"}</option>
+          {customers.filter((customer) => customer.id === selected || matches.includes(customer)).map((customer) => (
+            <option key={customer.id} value={customer.id}>{customer.name}{customer.phone || customer.line ? " ・ " + (customer.phone || customer.line) : ""}</option>
+          ))}
+        </select>
+        {query && matches.length === 0 && <p className="tiny muted">找不到符合的客戶</p>}
+      </div>
+      <button className="btn btn-primary btn-block" disabled={!allowGuest && !selected} onClick={() => onChoose(selected)}>
+        {allowGuest ? "儲存買家" : "確認賣出一件"}
+      </button>
+      <button className="btn btn-block" onClick={() => setCreating(true)}>新增客戶</button>
+      <button className="btn btn-block" onClick={onClose}>取消</button>
+    </Sheet>
+  );
+}
+
+function CustomersPage({ customers, orders, onSave }) {
+  const [query, setQuery] = useState("");
+  const [selectedId, setSelectedId] = useState("");
+  const [editing, setEditing] = useState(false);
+  const selected = customers.find((customer) => customer.id === selectedId);
+  const purchases = useMemo(() => {
+    const grouped = new Map();
+    [...orders].sort((a, b) => b.date.localeCompare(a.date)).forEach((order) => {
+      if (!order.customerId) return;
+      if (!grouped.has(order.customerId)) grouped.set(order.customerId, []);
+      grouped.get(order.customerId).push(order);
+    });
+    return grouped;
+  }, [orders]);
+  const cards = selected ? [selected] : searchCustomers(customers, query);
+  return (
+    <div>
+      {selected ? (
+        <button className="btn" onClick={() => setSelectedId("")}>← 客戶清單</button>
+      ) : (
+        <>
+          <div className="searchbar"><Icon name="search" size={19} /><input aria-label="搜尋客戶" value={query} placeholder="搜尋姓名、電話或 LINE ID" onChange={(event) => setQuery(event.target.value)} /></div>
+          <button className="btn btn-primary btn-block" onClick={() => setEditing(true)}>＋ 新增客戶</button>
+        </>
+      )}
+      <div className="customer-list">
+        {cards.length === 0 && <p className="card customer-card muted">{query ? "找不到符合的客戶" : "還沒有客戶資料"}</p>}
+        {cards.map((customer) => {
+          const history = purchases.get(customer.id) || [];
+          const total = history.reduce((sum, order) => sum + order.price * order.qty, 0);
+          const summary = history.length + " 筆消費 ・ 累計 " + NT(total);
+          return selected ? (
+            <div key={customer.id}>
+              <div className="card customer-card">
+                <div className="between"><strong>{customer.name}</strong><button className="restock-pill" onClick={() => setEditing(true)}>編輯</button></div>
+                {customer.phone && <div>電話 {customer.phone}</div>}
+                {customer.line && <div>LINE {customer.line}</div>}
+                {customer.notes && <div className="customer-notes">{customer.notes}</div>}
+                <div className="tiny muted">{summary}</div>
+              </div>
+              <div className="section-title">購買紀錄</div>
+              {history.length === 0 && <p className="card customer-card muted">目前沒有購買紀錄</p>}
+              <div className="customer-list">
+                {history.map((order) => (
+                  <div className="card customer-card" key={order.id}>
+                    <div className="between"><strong>{order.name}</strong><span className="num">{NT(order.price * order.qty)}</span></div>
+                    <div className="tiny muted">{order.date} ・ {order.qty} 件</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <button className="card customer-card customer-link" key={customer.id} onClick={() => setSelectedId(customer.id)}>
+              <strong>{customer.name}</strong>
+              <span className="tiny muted">{summary}{history.length > 0 && " ・ 最近 " + history[0].date}</span>
+            </button>
+          );
+        })}
+      </div>
+      {editing && <CustomerForm customer={selected} onClose={() => setEditing(false)} onSave={(customer) => {
+        onSave(customer);
+        setSelectedId(customer.id);
+        setEditing(false);
+      }} />}
+    </div>
+  );
+}
+
+window.CustomerPicker = CustomerPicker;
+window.CustomersPage = CustomersPage;
+</script>
+
 <script type="text/babel" data-src="orders.jsx">
 /* ===========================================================
    庫存頁：
@@ -1647,7 +1840,11 @@ window.PricingPage = PricingPage;
    - 圈選賣出（每點一下扣 1 件、記一筆銷售）
    =========================================================== */
 
-function InventoryPage({ products, setProducts, orders, setOrders }) {
+function InventoryPage({ products, setProducts, orders, setOrders, customers, onSaveCustomer }) {
+  const [buyerTarget, setBuyerTarget] = useState(null);
+  const [variantSale, setVariantSale] = useState(null);
+  const [showAllSales, setShowAllSales] = useState(false);
+  const buyerNames = useMemo(() => new Map(customers.map((customer) => [customer.id, customer.name])), [customers]);
   const [toast, setToast] = useState(null);
   const toastTimer = useRef(null);
   const [pop, setPop] = useState(null);
@@ -1673,9 +1870,10 @@ function InventoryPage({ products, setProducts, orders, setOrders }) {
   const clearToast = () => { if (toastTimer.current) clearTimeout(toastTimer.current); };
   useEffect(() => () => clearToast(), []);
 
-  const sellOne = (p) => {
+  const sellOne = (p, customerId) => {
     if ((p.stock || 0) <= 0) return;
     const order = { id: uid(), date: today, name: p.name + (p.variant ? "（" + p.variant + "）" : ""), qty: 1, price: p.price, cost: p.cost, productId: p.id };
+    if (customerId) order.customerId = customerId;
     setOrders((prev) => [order, ...prev]);
     setProducts((prev) => prev.map((x) => x.id === p.id ? { ...x, stock: Math.max(0, (x.stock || 0) - 1) } : x));
     setPop(p.id);
@@ -1703,8 +1901,8 @@ function InventoryPage({ products, setProducts, orders, setOrders }) {
   }, [products]);
 
   const recent = useMemo(() =>
-    [...orders].sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id)).slice(0, 8),
-    [orders]);
+    [...orders].sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id)).slice(0, showAllSales ? orders.length : 8),
+    [orders, showAllSales]);
 
   // 依名稱分組
   const groups = useMemo(() => {
@@ -1743,6 +1941,15 @@ function InventoryPage({ products, setProducts, orders, setOrders }) {
 
   const toggle = (name) => setOpenGroups((s) => ({ ...s, [name]: !s[name] }));
 
+  const variantOptions = variantSale ? products.filter((p) => p.name === variantSale.name) : [];
+  const selectedVariant = variantOptions.find((p) => p.id === variantSale?.productId && p.stock > 0);
+  const confirmVariantSale = (withCustomer) => {
+    if (!selectedVariant) return;
+    setVariantSale(null);
+    if (withCustomer) setBuyerTarget({ product: selectedVariant });
+    else sellOne(selectedVariant);
+  };
+
   // 單一變體的賣出列（用於群組展開後，或群組只有 1 件時）
   const VariantRow = ({ p, nested }) => {
     const stock = p.stock || 0;
@@ -1761,10 +1968,11 @@ function InventoryPage({ products, setProducts, orders, setOrders }) {
 
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: nested ? 14.5 : 15.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-            {nested ? (p.variant || "單一款式") : p.name}
+            {nested ? (p.variant || "未標示顏色／尺寸") : p.name}
           </div>
+          {!nested && p.variant && <div className="tiny muted">{p.variant}</div>}
           <div className="tiny muted num" style={{ marginTop: 2 }}>售 {NT(p.price)} ・ 賺 {NT(p.price - p.cost)}/件</div>
-          <div className="row" style={{ gap: 6, marginTop: 7 }}>
+          <div className="row sale-actions" style={{ gap: 6, marginTop: 7 }}>
             {out ? <span className="badge sold-out">已售完</span>
               : low ? <span className="badge low">剩不多</span>
               : <span className="badge ok">有貨</span>}
@@ -1772,6 +1980,7 @@ function InventoryPage({ products, setProducts, orders, setOrders }) {
             <button className="restock-pill" onClick={() => { setRestockId(p.id); setRestockQty(5); }}>
               <Icon name="restock" size={14} /> 補貨
             </button>
+            {!out && <button className="restock-pill" onClick={() => setBuyerTarget({ product: p })}>賣給客戶</button>}
           </div>
         </div>
 
@@ -1803,7 +2012,7 @@ function InventoryPage({ products, setProducts, orders, setOrders }) {
       </div>
 
       <div className="section-title">
-        商品庫存 <span className="sub">點圈圈 ✓ 賣出一件</span>
+        商品庫存 <span className="sub">多款商品可選顏色／尺寸</span>
       </div>
 
       {groups.length === 0 ? (
@@ -1841,6 +2050,10 @@ function InventoryPage({ products, setProducts, orders, setOrders }) {
                   <span className={"chev" + (open ? " open" : "")}><Icon name="chevron" size={20} /></span>
                 </div>
 
+                {!out && <div className="group-actions">
+                  <button className="btn btn-ghost btn-block" onClick={() => setVariantSale({ name: g.name, productId: "" })}>選顏色／尺寸賣出</button>
+                </div>}
+
                 {open && (
                   <div className="variant-wrap fade-in" style={{ paddingBottom: 2 }}>
                     {g.items.map((p) => <VariantRow key={p.id} p={p} nested={true} />)}
@@ -1855,7 +2068,9 @@ function InventoryPage({ products, setProducts, orders, setOrders }) {
       {/* 最近賣出 */}
       {recent.length > 0 && (
         <div>
-          <div className="section-title">最近賣出 <span className="sub">點 ↩ 可復原</span></div>
+          <div className="section-title">{showAllSales ? "全部銷售" : "最近賣出"}
+            {orders.length > 8 && <button className="restock-pill" onClick={() => setShowAllSales(!showAllSales)}>{showAllSales ? "只看最近" : "查看全部"}</button>}
+          </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {recent.map((o) => (
               <div key={o.id} className="card" style={{ padding: "11px 14px", display: "flex", alignItems: "center", gap: 10 }}>
@@ -1864,6 +2079,10 @@ function InventoryPage({ products, setProducts, orders, setOrders }) {
                   <div style={{ fontWeight: 600, fontSize: 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{o.name}</div>
                   <div className="tiny muted num">{fmtDateShort(o.date)} ・ 賺 {NT(o.price - o.cost)}</div>
                 </div>
+                <button className="restock-pill" style={{ maxWidth: "32%", overflowWrap: "anywhere", whiteSpace: "normal" }}
+                  onClick={() => setBuyerTarget({ order: o })}>
+                  {buyerNames.get(o.customerId) || "指定買家"}
+                </button>
                 <button onClick={() => undoSale(o.id, o.productId)}
                   style={{ border: "1px solid var(--line)", background: "var(--surface)", borderRadius: 9, padding: "6px 10px", color: "var(--ink-soft)", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12.5, fontWeight: 700, fontFamily: "var(--font-body)" }}>
                   <Icon name="undo" size={14} /> 復原
@@ -1872,6 +2091,41 @@ function InventoryPage({ products, setProducts, orders, setOrders }) {
             ))}
           </div>
         </div>
+      )}
+
+      {variantSale && (
+        <Sheet title={"賣出 " + variantSale.name} onClose={() => setVariantSale(null)}>
+          <div className="field">
+            <label htmlFor="sale-variant">顏色／尺寸</label>
+            <select id="sale-variant" className="contact-field" value={variantSale.productId}
+              onChange={(e) => setVariantSale({ ...variantSale, productId: e.target.value })}>
+              <option value="">請選擇要扣庫存的款式</option>
+              {variantOptions.map((p) => (
+                <option key={p.id} value={p.id} disabled={!(p.stock > 0)}>
+                  {p.variant || "未標示顏色／尺寸"} ・ {p.stock > 0 ? "剩 " + p.stock + " 件" : "售完"}
+                </option>
+              ))}
+            </select>
+          </div>
+          <button className="btn btn-primary btn-block" disabled={!selectedVariant} onClick={() => confirmVariantSale(false)}>確認賣出一件</button>
+          <button className="btn btn-block" disabled={!selectedVariant} onClick={() => confirmVariantSale(true)}>賣給客戶</button>
+          <button className="btn btn-block" onClick={() => setVariantSale(null)}>取消</button>
+        </Sheet>
+      )}
+
+      {buyerTarget && (
+        <CustomerPicker title={buyerTarget.product ? "賣出 " + buyerTarget.product.name + (buyerTarget.product.variant ? "（" + buyerTarget.product.variant + "）" : "") : "編輯買家"}
+          customers={customers} customerId={buyerTarget.order?.customerId} allowGuest={!!buyerTarget.order}
+          onCreate={onSaveCustomer} onClose={() => setBuyerTarget(null)}
+          onChoose={(customerId) => {
+            if (buyerTarget.order) {
+              setOrders((prev) => prev.map((order) => order.id === buyerTarget.order.id ? { ...order, customerId } : order));
+            } else {
+              const product = products.find((item) => item.id === buyerTarget.product.id);
+              if (product) sellOne(product, customerId);
+            }
+            setBuyerTarget(null);
+          }} />
       )}
 
       {/* 賣出 toast */}
@@ -2098,16 +2352,23 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 const TABS = [
   { id: "price", label: "定價", icon: "price" },
   { id: "orders", label: "庫存", icon: "box" },
+  { id: "customers", label: "客戶", icon: "book" },
   { id: "stats", label: "統計", icon: "chart" }
 ];
 
-const APP_VERSION = "V3";
+const APP_VERSION = "V3.2";
 
 function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
   const [tab, setTab] = usePersistentState("tab", "price");
   const [products, setProducts] = usePersistentState("products", []);
   const [orders, setOrders] = usePersistentState("orders", []);
+  const [customers, setCustomers] = usePersistentState("customers", []);
+  const saveCustomer = (customer) => setCustomers((prev) =>
+    prev.some((item) => item.id === customer.id)
+      ? prev.map((item) => item.id === customer.id ? customer : item)
+      : [customer, ...prev]
+  );
   const [tags, setTags] = usePersistentState("tags", { name: [], color: ["紅色", "黑色", "白色", "藍色", "米色"], size: ["S", "M", "L", "XL", "均碼"] });
   const [lightbox, setLightbox] = useState(null);
 
@@ -2156,7 +2417,7 @@ function App() {
   const thisMonth = ymOf(todayISO());
   const monthProfit = orders.reduce((s, o) => ymOf(o.date) === thisMonth ? s + (o.price - o.cost) * o.qty : s, 0);
 
-  const headTitle = { price: "定價小幫手", orders: "庫存管理", stats: "營收統計" }[tab];
+  const headTitle = { price: "定價小幫手", orders: "庫存管理", customers: "客戶管理", stats: "營收統計" }[tab];
 
   return (
     <div className="app" style={appStyle}>
@@ -2173,7 +2434,8 @@ function App() {
 
       <div className="app-body" key={tab}>
         {tab === "price" && <PricingPage products={products} setProducts={setProducts} defaultMargin={t.defaultMargin} tags={tags} setTags={setTags} />}
-        {tab === "orders" && <InventoryPage products={products} setProducts={setProducts} orders={orders} setOrders={setOrders} />}
+        {tab === "orders" && <InventoryPage products={products} setProducts={setProducts} orders={orders} setOrders={setOrders} customers={customers} onSaveCustomer={saveCustomer} />}
+        {tab === "customers" && <CustomersPage customers={customers} orders={orders} onSave={saveCustomer} />}
         {tab === "stats" && <StatsPage orders={orders} />}
       </div>
 
