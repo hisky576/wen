@@ -2160,7 +2160,7 @@ function InventoryPage({ products, setProducts, orders, setOrders, customers, on
       <div className="card empty" style={{ marginTop: 16 }}>
         <div className="em-ic">📦</div>
         <p>庫存還是空的</p>
-        <p className="tiny">先到「定價」分頁把商品算好價格、填入進貨數量，<br />存成商品後就會出現在這裡</p>
+        <p className="tiny">先到「入庫」分頁把商品算好價格、填入進貨數量，<br />存成商品後就會出現在這裡</p>
       </div>
     );
   }
@@ -2445,7 +2445,7 @@ function deletePurchase(inventory, original) {
   return { ...inventory, purchases: inventory.purchases.filter((p) => p.id !== original.id) };
 }
 
-function PurchaseForm({ purchase = null, onSave, onDelete, onClose }) {
+function PurchaseForm({ purchase = null, tags = {}, setTags, onSave, onDelete, onClose }) {
   const [name, setName] = useState(purchase ? purchase.name : "");
   const [variant, setVariant] = useState(purchase ? purchase.variant : "");
   const [cost, setCost] = useState(purchase?.cost == null ? "" : String(purchase.cost));
@@ -2455,6 +2455,23 @@ function PurchaseForm({ purchase = null, onSave, onDelete, onClose }) {
   const [supplier, setSupplier] = useState(purchase ? purchase.supplier : "");
   const [date, setDate] = useState(purchase ? purchase.date : todayISO());
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [managingTags, setManagingTags] = useState(false);
+  const T = { name: tags.name || [], color: tags.color || [], size: tags.size || [] };
+  const variantTokens = variant.split(/\s+/).filter(Boolean);
+  const toggleToken = (group, token) => setVariant((current) => {
+    const parts = current.split(/\s+/).filter(Boolean);
+    const other = parts.filter((part) => !T[group].includes(part));
+    return (parts.includes(token) ? other : [...other, token]).join(" ");
+  });
+  const addTag = (group, value) => {
+    const tag = value.trim();
+    if (!tag) return;
+    setTags((current) => {
+      const values = current[group] || [];
+      return values.includes(tag) ? current : { ...current, [group]: [...values, tag] };
+    });
+  };
+  const removeTag = (group, tag) => setTags((current) => ({ ...current, [group]: (current[group] || []).filter((value) => value !== tag) }));
   const validQuantity = quantity !== "" && Number.isSafeInteger(Number(quantity)) && Number(quantity) > 0;
   const validReceived = received !== "" && Number.isSafeInteger(Number(received)) && Number(received) >= 0 && Number(received) <= Number(quantity);
   const validMoney = [cost, price].every((value) => value === "" || (Number.isFinite(Number(value)) && Number(value) >= 0));
@@ -2462,11 +2479,13 @@ function PurchaseForm({ purchase = null, onSave, onDelete, onClose }) {
   const valid = name.trim() && validQuantity && validReceived && validMoney && validDate;
 
   return (
+    <>
     <Sheet title={purchase ? "編輯進貨" : "新增進貨"} onClose={onClose}>
       <p className="tiny muted">這裡管理獨立的進貨記錄，新增、修改、到貨或刪除均不影響庫存。</p>
       <form onSubmit={(event) => {
         event.preventDefault();
         if (!valid || confirmDelete) return;
+        addTag("name", name);
         onSave({ ...purchase, id: purchase ? purchase.id : uid(), name: name.trim(), variant: variant.trim(),
           cost: cost === "" ? null : Number(cost), price: price === "" ? null : Number(price),
           supplier: supplier.trim(), date, ordered: Number(quantity), received: Number(received) });
@@ -2474,10 +2493,26 @@ function PurchaseForm({ purchase = null, onSave, onDelete, onClose }) {
         <div className="field">
           <label htmlFor="purchase-name">商品名稱</label>
           <input id="purchase-name" className="contact-field" value={name} onChange={(e) => setName(e.target.value)} required />
+          {T.name.length > 0 && <div className="chips" style={{ marginTop: 9 }}>
+            {T.name.map((tag) => <button key={tag} type="button" aria-label={"商品名稱標籤 " + tag} aria-pressed={name.trim() === tag}
+              className={"chip" + (name.trim() === tag ? " active" : "")} onClick={() => setName(tag)}>{tag}</button>)}
+          </div>}
         </div>
         <div className="field">
-          <label htmlFor="purchase-variant">顏色／尺寸（選填）</label>
+          <div className="between" style={{ marginBottom: 7 }}>
+            <label htmlFor="purchase-variant" style={{ margin: 0 }}>顏色／尺寸（選填）</label>
+            <button type="button" className="restock-pill" onClick={() => setManagingTags(true)}>管理標籤</button>
+          </div>
           <input id="purchase-variant" className="contact-field" value={variant} onChange={(e) => setVariant(e.target.value)} />
+          {[{ key: "color", label: "顏色" }, { key: "size", label: "尺寸" }].map((group) => T[group.key].length > 0 && (
+            <div key={group.key} style={{ marginTop: 9 }}>
+              <div className="tiny muted" style={{ marginBottom: 5 }}>{group.label}</div>
+              <div className="chips">{T[group.key].map((tag) => <button key={tag} type="button"
+                aria-label={group.label + "標籤 " + tag} aria-pressed={variantTokens.includes(tag)}
+                className={"chip" + (variantTokens.includes(tag) ? " active" : "")} onClick={() => toggleToken(group.key, tag)}>{tag}</button>)}</div>
+            </div>
+          ))}
+          <p className="tiny muted">點標籤快速填入，也可手動修改。標籤與入庫頁共用，進貨及庫存記錄各自獨立。</p>
         </div>
         <div className="row" style={{ gap: 10 }}>
           <div className="field" style={{ flex: 1, minWidth: 0 }}>
@@ -2525,6 +2560,8 @@ function PurchaseForm({ purchase = null, onSave, onDelete, onClose }) {
         <button type="button" className="btn btn-block" onClick={onClose}>取消</button>
       </form>
     </Sheet>
+    {managingTags && <TagManager tags={T} onAdd={addTag} onRemove={removeTag} onClose={() => setManagingTags(false)} />}
+    </>
   );
 }
 
@@ -2552,7 +2589,7 @@ function ReceivePurchaseForm({ purchase, onReceive, onClose }) {
   );
 }
 
-function PurchasesPage({ inventory, setInventory }) {
+function PurchasesPage({ inventory, setInventory, tags, setTags }) {
   const [query, setQuery] = useState("");
   const [pendingOnly, setPendingOnly] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -2605,12 +2642,12 @@ function PurchasesPage({ inventory, setInventory }) {
           );
         })}
       </div>
-      {adding && <PurchaseForm onClose={() => setAdding(false)} onSave={(purchase) => {
+      {adding && <PurchaseForm tags={tags} setTags={setTags} onClose={() => setAdding(false)} onSave={(purchase) => {
         setInventory((current) => addPurchase(current, purchase));
         setAdding(false);
         setQuery("");
       }} />}
-      {editing && <PurchaseForm key={editing.id} purchase={editing} onClose={() => setEditId(null)}
+      {editing && <PurchaseForm key={editing.id} purchase={editing} tags={tags} setTags={setTags} onClose={() => setEditId(null)}
         onSave={(updated) => {
           const error = purchaseEditError(inventory, editing, updated);
           if (error) { setEditError(error); setEditId(null); return; }
@@ -2811,14 +2848,14 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 }/*EDITMODE-END*/;
 
 const TABS = [
-  { id: "price", label: "定價", icon: "price" },
-  { id: "purchases", label: "進貨", icon: "restock" },
+  { id: "price", label: "入庫", icon: "price" },
   { id: "orders", label: "庫存", icon: "box" },
+  { id: "purchases", label: "進貨", icon: "restock" },
   { id: "customers", label: "客戶", icon: "book" },
-  { id: "stats", label: "統計", icon: "chart" }
+  { id: "stats", label: "營收", icon: "chart" }
 ];
 
-const APP_VERSION = "V3.8";
+const APP_VERSION = "V3.9";
 
 function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
@@ -2885,7 +2922,7 @@ function App() {
   const thisMonth = ymOf(todayISO());
   const monthProfit = orders.reduce((s, o) => ymOf(o.date) === thisMonth ? s + (o.price - o.cost) * o.qty : s, 0);
 
-  const headTitle = { price: "定價小幫手", purchases: "進貨", orders: "庫存管理", customers: "客戶管理", stats: "營收統計" }[tab];
+  const headTitle = { price: "入庫", purchases: "進貨", orders: "庫存管理", customers: "客戶管理", stats: "營收" }[tab];
 
   return (
     <div className="app" style={appStyle}>
@@ -2906,7 +2943,7 @@ function App() {
       </div>}
       <div className="app-body" key={tab}>
         {tab === "price" && <PricingPage products={products} setProducts={setProducts} defaultMargin={t.defaultMargin} tags={tags} setTags={setTags} />}
-        {tab === "purchases" && <PurchasesPage inventory={inventory} setInventory={setInventory} />}
+        {tab === "purchases" && <PurchasesPage inventory={inventory} setInventory={setInventory} tags={tags} setTags={setTags} />}
         {tab === "orders" && <InventoryPage products={products} setProducts={setProducts} orders={orders} setOrders={setOrders} customers={customers} onSaveCustomer={saveCustomer} />}
         {tab === "customers" && <CustomersPage customers={customers} orders={orders} onSave={saveCustomer} />}
         {tab === "stats" && <StatsPage orders={orders} inventory={inventory} customers={customers} />}
@@ -2950,5 +2987,6 @@ ReactDOM.createRoot(document.getElementById("root")).render(<App />);
 </script>
 </body>
 </html>
+
 
 
