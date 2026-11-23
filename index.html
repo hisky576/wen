@@ -1397,6 +1397,7 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags }) {
   const [margin, setMargin] = useState(defaultMargin);
   const [marginEnabled, setMarginEnabled] = usePersistentState("marginEnabled", true);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
   const [savedVariant, setSavedVariant] = useState(null);
   const [name, setName] = useState("");
   const [variant, setVariant] = useState("");
@@ -1440,24 +1441,41 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags }) {
 
   // 雙向連動：毛利率當連結，改「成本」或「售價」都會自動帶動另一邊
   const onCost = (v) => {
+    setSaveError("");
     setCost(v);
     const cc = Number(v) || 0;
     if (marginEnabled && cc > 0) setPrice(String(Math.round(priceFromMargin(cc, margin))));
   };
   const onPrice = (v) => {
+    setSaveError("");
     setPrice(v);
     const pp = Number(v) || 0;
-    if (marginEnabled && pp > 0) setCost(String(Math.round(pp * (1 - Math.min(margin, 95) / 100))));
+    if (marginEnabled && pp > 0 && cost.trim() !== "") setCost(String(Math.round(pp * (1 - Math.min(margin, 95) / 100))));
   };
   const onMargin = (m) => {
     setMargin(m);
     const cc = Number(cost) || 0;
     const pp = Number(price) || 0;
     if (cc > 0) setPrice(String(Math.round(priceFromMargin(cc, m))));
-    else if (pp > 0) setCost(String(Math.round(pp * (1 - Math.min(m, 95) / 100))));
+    else if (pp > 0 && cost.trim() !== "") setCost(String(Math.round(pp * (1 - Math.min(m, 95) / 100))));
   };
 
   const reset = () => { setCost(""); setPrice(""); setMargin(defaultMargin); setName(""); setVariant(""); setStockQty(1); setImages([]); setEditId(null); };
+
+  const requestSave = () => {
+    if (cost.trim() === "") { setSaveError("未輸入成本"); return; }
+    if (!Number.isFinite(Number(cost)) || c <= 0) { setSaveError("成本須為大於 0 的金額"); return; }
+    if (price.trim() === "") { setSaveError("未輸入售價"); return; }
+    if (!Number.isFinite(Number(price)) || pr <= 0) { setSaveError("售價須為大於 0 的金額"); return; }
+    setSaveError("");
+    setSaving(true);
+  };
+
+  const cancelSave = () => {
+    if (imgBusy) return;
+    setSaving(false); setSavedVariant(null); setSaveError("");
+    setName(""); setVariant(""); setStockQty(1); setImages([]); setEditId(null);
+  };
 
   const saveProduct = (keepAdding = false) => {
     if (c <= 0 || pr <= 0 || !name.trim()) return;
@@ -1521,7 +1539,7 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags }) {
         </div>
 
         <div className="field" style={{ marginBottom: 0 }}>
-          <label>{marginEnabled ? "售價（修改後會反推成本）" : "售價"}</label>
+          <label>{marginEnabled ? "售價（已填成本時會反推成本）" : "售價"}</label>
           <MoneyInput value={price} onChange={onPrice} placeholder="想賣多少錢" />
         </div>
       </div>
@@ -1541,10 +1559,11 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags }) {
         </div>
 
         <button className="btn btn-primary btn-block" style={{ marginTop: 18 }}
-          disabled={c <= 0 || pr <= 0}
-          onClick={() => { if (c > 0 && pr > 0) { setSaving(true); } }}>
+          disabled={imgBusy}
+          onClick={requestSave}>
           <span style={{ color: "#fff" }}><Icon name="plus" size={18} /></span> {editId ? "存成商品" : "存成商品（放進庫存）"}
         </button>
+        {saveError && <p role="alert" style={{ margin: "10px 0 0", color: "var(--warn)", fontWeight: 700 }}>{saveError}</p>}
       </div>
 
       {/* 商品庫 */}
@@ -1596,7 +1615,7 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags }) {
       {/* 命名 / 編輯 表單 */}
       {saving && (
         <Sheet title={editId ? "編輯商品" : savedVariant ? "繼續加入款式" : "存成商品"}
-          onClose={() => { setSaving(false); setSavedVariant(null); if (!editId) setName(""); }}>
+          onClose={cancelSave}>
           <div className="field">
             <label>商品名稱</label>
             <input className="plain" type="text" value={name} autoFocus
@@ -1696,6 +1715,7 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags }) {
               {editId ? "儲存變更" : "加入商品庫"}
             </button>
           </div>
+          <button type="button" className="btn btn-block" style={{ marginTop: 10 }} disabled={imgBusy} onClick={cancelSave}>取消</button>
         </Sheet>
       )}
 
@@ -2798,7 +2818,7 @@ const TABS = [
   { id: "stats", label: "統計", icon: "chart" }
 ];
 
-const APP_VERSION = "V3.7";
+const APP_VERSION = "V3.8";
 
 function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
@@ -2930,4 +2950,5 @@ ReactDOM.createRoot(document.getElementById("root")).render(<App />);
 </script>
 </body>
 </html>
+
 
