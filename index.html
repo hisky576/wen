@@ -982,16 +982,30 @@ function usePersistentState(key, initial) {
   return [val, setVal];
 }
 
+// 舊版備份保留紀錄內容，移除商品關聯，不回溯調整庫存。
+function normalizeInventory(saved) {
+  const data = Array.isArray(saved) ? { products: saved, purchases: [] } : (saved || {});
+  return {
+    ...data,
+    products: Array.isArray(data.products) ? data.products : [],
+    purchases: (Array.isArray(data.purchases) ? data.purchases : []).map((purchase) => {
+      const { productId, ...entry } = purchase;
+      return entry;
+    })
+  };
+}
+
 function readInventory() {
-  const saved = store.get("products", []);
-  return Array.isArray(saved) ? { products: saved, purchases: [] } : saved;
+  return normalizeInventory(store.get("products", []));
 }
 
 function validPurchase(purchase) {
-  return purchase && ["id", "productId", "name", "variant", "date", "supplier"].every((key) =>
+  return purchase && ["id", "name", "variant", "date", "supplier"].every((key) =>
     typeof purchase[key] === "string"
-  ) && Number.isSafeInteger(purchase.ordered) && purchase.ordered > 0 &&
-    Number.isSafeInteger(purchase.received) && purchase.received >= 0 && purchase.received <= purchase.ordered;
+  ) && purchase.name.trim().length > 0 &&
+    Number.isSafeInteger(purchase.ordered) && purchase.ordered > 0 &&
+    Number.isSafeInteger(purchase.received) && purchase.received >= 0 && purchase.received <= purchase.ordered &&
+    ["cost", "price"].every((key) => purchase[key] == null || (typeof purchase[key] === "number" && Number.isFinite(purchase[key]) && purchase[key] >= 0));
 }
 
 /* ---- 格式化 ---- */
@@ -1268,7 +1282,7 @@ function BackupCard({ inventory: liveInventory, orders: liveOrders, customers: l
 
   const doExport = () => {
     const payload = {
-      app: "iuaM", version: 4, exportedAt: new Date().toISOString(),
+      app: "iuaM", version: 5, exportedAt: new Date().toISOString(),
       ...(liveInventory || readInventory()), orders, customers
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
@@ -1302,7 +1316,7 @@ function BackupCard({ inventory: liveInventory, orders: liveOrders, customers: l
           "確定要還原這個備份嗎？\n\n備份內容：商品 " + data.products.length + " 件、訂單 " + data.orders.length + " 筆、客戶 " + (data.customers || []).length + " 位、進貨 " + (data.purchases || []).length + " 筆。\n\n⚠️ 這會「覆蓋」你目前的資料。"
         );
         if (!ok) return;
-        if (!store.set("products", { products: data.products, purchases: data.purchases || [] })) {
+        if (!store.set("products", normalizeInventory({ products: data.products, purchases: data.purchases || [] }))) {
           flash("err", "儲存空間不足或無法寫入，未能還原備份，原資料已保留。");
           return;
         }
@@ -1376,7 +1390,7 @@ function marginFromPrice(cost, price) {
   return ((price - cost) / price) * 100;
 }
 
-function PricingPage({ products, setProducts, defaultMargin, tags, setTags, purchases = [] }) {
+function PricingPage({ products, setProducts, defaultMargin, tags, setTags }) {
   const [shareProduct, setShareProduct] = useState(null);
   const [cost, setCost] = useState("");
   const [price, setPrice] = useState("");
@@ -1391,7 +1405,6 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags, purc
   const [imgBusy, setImgBusy] = useState(false);
   const [editId, setEditId] = useState(null);
   const [managingTags, setManagingTags] = useState(false);
-  const hasPendingPurchase = purchases.some((p) => p.productId === editId && p.received < p.ordered);
 
   // 標籤（三組：商品名稱 / 顏色 / 尺寸）
   const T = { name: (tags && tags.name) || [], color: (tags && tags.color) || [], size: (tags && tags.size) || [] };
@@ -1536,7 +1549,7 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags, purc
 
       {/* 商品庫 */}
       <div className="section-title">
-        商品資料 <span className="sub">{products.length} 件</span>
+        入庫記錄 <span className="sub">{products.length} 件</span>
       </div>
 
       {products.length === 0 ? (
@@ -1653,7 +1666,7 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags, purc
 
           {/* 庫存數量 */}
           <div className="field">
-            <label>{editId ? "目前庫存（進貨幾件）" : "進貨了幾件？（庫存數量）"}</label>
+            <label>{editId ? "目前庫存數量" : "這次入庫幾件？（庫存數量）"}</label>
             <div className="between">
               <div className="stepper">
                 <button onClick={() => setStockQty(Math.max(0, stockQty - 1))}>−</button>
@@ -1669,10 +1682,9 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags, purc
             <div className="tiny muted" style={{ marginTop: 8, marginLeft: 2 }}>存好後會出現在「庫存」分頁，每賣出一件點一下圈圈就自動扣 1</div>
           </div>
           {savedVariant && <p className="tiny muted" role="status">已加入 {savedVariant}，請填下一款的顏色／尺寸和庫存。</p>}
-          {hasPendingPurchase && <p className="tiny muted">這款商品仍有待到貨數量，到齊後才能刪除。</p>}
           <div className="row sale-actions" style={{ gap: 10 }}>
             {editId && (
-              <button className="btn btn-ghost" style={{ color: "var(--warn)" }} disabled={hasPendingPurchase} aria-label="刪除商品"
+              <button className="btn btn-ghost" style={{ color: "var(--warn)" }} aria-label="刪除商品"
                 onClick={() => { setProducts((prev) => prev.filter((x) => x.id !== editId)); setSaving(false); reset(); }}>
                 <Icon name="trash" size={18} />
               </button>
@@ -2006,7 +2018,7 @@ function ProductEditForm({ product, products, onSave, onClose }) {
         </div>
         <div className="field"><label htmlFor="edit-product-stock">目前剩餘庫存</label>
           <input id="edit-product-stock" className="contact-field" type="number" inputMode="numeric" min="0" step="1" value={stock} onChange={(e) => setStock(e.target.value)} required />
-          <p className="tiny muted">用於盤點修正，只改目前庫存；進貨／入庫紀錄與已售訂單會保留。</p></div>
+          <p className="tiny muted">用於盤點修正，只改目前庫存；進貨記錄與已售訂單會保留。</p></div>
         <div className="field"><label>商品照片（選填）</label>
           <MultiPhotoPicker value={images} onChange={setImages} busy={busy} onBusy={setBusy} /></div>
         <button className="btn btn-primary btn-block" disabled={!valid}>{busy ? "照片處理中…" : "儲存庫存變更"}</button>
@@ -2016,7 +2028,7 @@ function ProductEditForm({ product, products, onSave, onClose }) {
   );
 }
 
-function InventoryPage({ products, setProducts, orders, setOrders, customers, onSaveCustomer, onRestock }) {
+function InventoryPage({ products, setProducts, orders, setOrders, customers, onSaveCustomer }) {
   const [editId, setEditId] = useState(null);
   const editingProduct = products.find((p) => p.id === editId);
   const [buyerTarget, setBuyerTarget] = useState(null);
@@ -2068,7 +2080,10 @@ function InventoryPage({ products, setProducts, orders, setOrders, customers, on
   };
 
   const doRestock = () => {
-    onRestock(restockId, restockQty);
+    setProducts((current) => current.map((p) => {
+      const stock = (Number(p.stock) || 0) + restockQty;
+      return p.id === restockId && Number.isSafeInteger(stock) ? { ...p, stock } : p;
+    }));
     setRestockId(null); setRestockQty(5);
   };
 
@@ -2328,7 +2343,7 @@ function InventoryPage({ products, setProducts, orders, setOrders, customers, on
         return (
           <Sheet title={"補貨：" + p.name + (p.variant ? "（" + p.variant + "）" : "")} onClose={() => setRestockId(null)}>
             <div className="field">
-              <label>這次進貨幾件？</label>
+              <label>這次補入庫存幾件？</label>
               <div className="between">
                 <div className="stepper">
                   <button onClick={() => setRestockQty(Math.max(1, restockQty - 1))}>−</button>
@@ -2358,147 +2373,119 @@ window.InventoryPage = InventoryPage;
 </script>
 
 <script type="text/babel" data-src="purchases.jsx">
+// 進貨記錄獨立管理；所有操作只更新 purchases，從不建立或修改庫存商品。
+function addPurchase(inventory, purchase) {
+  if (!validPurchase(purchase) || inventory.purchases.some((entry) => entry.id === purchase.id)) return inventory;
+  const { productId, ...entry } = purchase;
+  return { ...inventory, purchases: [entry, ...inventory.purchases] };
+}
+
 function receivePurchase(inventory, id, previouslyReceived, amount) {
   const purchase = inventory.purchases.find((entry) => entry.id === id);
-  const product = inventory.products.find((entry) => entry.id === purchase?.productId);
   if (!purchase || purchase.received !== previouslyReceived ||
-      !Number.isSafeInteger(amount) || amount < 1 || amount > purchase.ordered - purchase.received ||
-      !product || !Number.isSafeInteger((Number(product.stock) || 0) + amount)) return inventory;
-
+      !Number.isSafeInteger(amount) || amount < 1 || amount > purchase.ordered - purchase.received) return inventory;
   return {
     ...inventory,
-    products: inventory.products.map((product) => product.id === purchase.productId
-      ? { ...product, stock: (Number(product.stock) || 0) + amount } : product),
-    purchases: inventory.purchases.map((entry) => entry.id === id
-      ? { ...entry, received: entry.received + amount } : entry)
+    purchases: inventory.purchases.map((entry) => entry.id === id ? { ...entry, received: entry.received + amount } : entry)
   };
 }
 
 function purchaseEditError(inventory, original, updated) {
   const current = inventory.purchases.find((p) => p.id === original.id);
   if (!current || JSON.stringify(current) !== JSON.stringify(original)) return "這筆進貨已更新，請關閉後重新編輯。";
-  if (!validPurchase(updated) || updated.id !== original.id) return "請確認進貨件數與已入庫件數。";
-  const product = inventory.products.find((p) => p.id === updated.productId);
-  if (!product) return updated.productId === original.productId && updated.received === original.received
-    ? "" : "原商品已移除，已入庫件數須維持原值。";
-  if (original.received > 0 && original.productId !== updated.productId) return "已有入庫紀錄，無法改到其他商品。";
-  const stock = Number(product.stock) || 0;
-  const nextStock = stock + updated.received - original.received;
-  if (!Number.isSafeInteger(nextStock) || nextStock < 0) return "減少的入庫件數超過目前庫存，請先核對已售數量。";
+  if (!validPurchase(updated) || updated.id !== original.id) return "請確認商品名稱、進貨件數及已到貨件數。";
   return "";
 }
 
 function editPurchase(inventory, original, updated) {
   if (purchaseEditError(inventory, original, updated)) return inventory;
-  const delta = updated.received - original.received;
-  return {
-    ...inventory,
-    products: inventory.products.map((p) => p.id === updated.productId ? { ...p, stock: (Number(p.stock) || 0) + delta } : p),
-    purchases: inventory.purchases.map((p) => p.id === original.id ? { ...p, ...updated } : p)
-  };
+  const { productId, ...entry } = { ...original, ...updated };
+  return { ...inventory, purchases: inventory.purchases.map((p) => p.id === original.id ? entry : p) };
 }
 
-function PurchaseForm({ products, purchase = null, onSave, onClose }) {
-  const [productId, setProductId] = useState(purchase ? purchase.productId : "");
-  const [name, setName] = useState("");
-  const [variant, setVariant] = useState("");
-  const [cost, setCost] = useState("");
-  const [price, setPrice] = useState("");
+function deletePurchase(inventory, original) {
+  const current = inventory.purchases.find((p) => p.id === original.id);
+  if (!current || JSON.stringify(current) !== JSON.stringify(original)) return inventory;
+  return { ...inventory, purchases: inventory.purchases.filter((p) => p.id !== original.id) };
+}
+
+function PurchaseForm({ purchase = null, onSave, onDelete, onClose }) {
+  const [name, setName] = useState(purchase ? purchase.name : "");
+  const [variant, setVariant] = useState(purchase ? purchase.variant : "");
+  const [cost, setCost] = useState(purchase?.cost == null ? "" : String(purchase.cost));
+  const [price, setPrice] = useState(purchase?.price == null ? "" : String(purchase.price));
   const [quantity, setQuantity] = useState(purchase ? String(purchase.ordered) : "1");
   const [received, setReceived] = useState(purchase ? String(purchase.received) : "0");
   const [supplier, setSupplier] = useState(purchase ? purchase.supplier : "");
   const [date, setDate] = useState(purchase ? purchase.date : todayISO());
-  const isNew = !purchase && productId === "new";
-  const existing = products.find((product) => product.id === productId);
-  const matchingProduct = isNew && products.find((product) =>
-    product.name === name.trim() && (product.variant || "") === variant.trim());
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const validQuantity = quantity !== "" && Number.isSafeInteger(Number(quantity)) && Number(quantity) > 0;
   const validReceived = received !== "" && Number.isSafeInteger(Number(received)) && Number(received) >= 0 && Number(received) <= Number(quantity);
-  const stockAfter = (Number(existing?.stock) || 0) + Number(received) - (purchase?.received || 0);
-  const validStock = Number.isSafeInteger(stockAfter) && stockAfter >= 0;
+  const validMoney = [cost, price].every((value) => value === "" || (Number.isFinite(Number(value)) && Number(value) >= 0));
   const validDate = /^\d{4}-\d{2}-\d{2}$/.test(date) && Number.isFinite(Date.parse(date + "T00:00:00Z")) && new Date(date + "T00:00:00Z").toISOString().slice(0, 10) === date;
-  const validProduct = existing || (purchase && productId === purchase.productId && !existing && Number(received) === purchase.received) || (isNew && name.trim() && !matchingProduct &&
-    Number.isFinite(Number(cost)) && cost !== "" && Number(cost) >= 0 &&
-    Number.isFinite(Number(price)) && Number(price) > 0);
-
-  const submit = (event) => {
-    event.preventDefault();
-    if (!validQuantity || !validReceived || !validStock || !validDate || !validProduct) return;
-    const product = existing || (purchase && !isNew ? { id: purchase.productId, name: purchase.name, variant: purchase.variant } : {
-      id: uid(), name: name.trim(), variant: variant.trim(), stock: 0,
-      cost: Number(cost), price: Number(price),
-      margin: Math.round(marginFromPrice(Number(cost), Number(price))), img: null, images: []
-    });
-    onSave({
-      ...purchase, id: purchase ? purchase.id : uid(), productId: product.id, name: product.name, variant: product.variant || "",
-      supplier: supplier.trim(), date, ordered: Number(quantity), received: Number(received)
-    }, existing || purchase ? null : product);
-  };
+  const valid = name.trim() && validQuantity && validReceived && validMoney && validDate;
 
   return (
-    <Sheet title={purchase ? "編輯進貨／入庫紀錄" : "新增進貨"} onClose={onClose}>
-      <form onSubmit={submit}>
+    <Sheet title={purchase ? "編輯進貨" : "新增進貨"} onClose={onClose}>
+      <p className="tiny muted">這裡管理獨立的進貨記錄，新增、修改、到貨或刪除均不影響庫存。</p>
+      <form onSubmit={(event) => {
+        event.preventDefault();
+        if (!valid || confirmDelete) return;
+        onSave({ ...purchase, id: purchase ? purchase.id : uid(), name: name.trim(), variant: variant.trim(),
+          cost: cost === "" ? null : Number(cost), price: price === "" ? null : Number(price),
+          supplier: supplier.trim(), date, ordered: Number(quantity), received: Number(received) });
+      }}>
         <div className="field">
-          <label htmlFor="purchase-product">商品／款式</label>
-          <select id="purchase-product" className="contact-field" value={productId} disabled={!!purchase?.received} onChange={(event) => setProductId(event.target.value)} required>
-            <option value="">請選擇商品或新增款式</option>
-            {!purchase && <option value="new">＋ 新增商品／款式</option>}
-            {purchase && !existing && <option value={purchase.productId}>原商品已移除，請選擇現有商品</option>}
-            {products.map((product) => (
-              <option key={product.id} value={product.id}>
-                {product.name}{product.variant ? " ・ " + product.variant : ""}（庫存 {product.stock || 0}）
-              </option>
-            ))}
-          </select>
-          {!!purchase?.received && <p className="tiny muted">這筆已有入庫紀錄，商品款式固定。商品名稱、成本與售價請到庫存的「編輯」修改。</p>}
-          {purchase && !existing && <p className="tiny muted">原商品已移除，可修改進貨日期、供應商及進貨件數；已入庫件數須維持原值。</p>}
+          <label htmlFor="purchase-name">商品名稱</label>
+          <input id="purchase-name" className="contact-field" value={name} onChange={(e) => setName(e.target.value)} required />
         </div>
-        {isNew && <>
-          <div className="field">
-            <label htmlFor="purchase-name">商品名稱</label>
-            <input id="purchase-name" className="contact-field" value={name} onChange={(event) => setName(event.target.value)} required />
+        <div className="field">
+          <label htmlFor="purchase-variant">顏色／尺寸（選填）</label>
+          <input id="purchase-variant" className="contact-field" value={variant} onChange={(e) => setVariant(e.target.value)} />
+        </div>
+        <div className="row" style={{ gap: 10 }}>
+          <div className="field" style={{ flex: 1, minWidth: 0 }}>
+            <label htmlFor="purchase-cost">每件成本（選填）</label>
+            <input id="purchase-cost" className="contact-field" type="number" inputMode="decimal" min="0" step="any"
+              value={cost} onChange={(e) => setCost(e.target.value)} />
           </div>
-          <div className="field">
-            <label htmlFor="purchase-variant">顏色／尺寸（選填）</label>
-            <input id="purchase-variant" className="contact-field" value={variant} onChange={(event) => setVariant(event.target.value)} />
-            {matchingProduct && <p className="tiny muted">已有同名款式，請從商品清單選取。</p>}
+          <div className="field" style={{ flex: 1, minWidth: 0 }}>
+            <label htmlFor="purchase-price">每件售價（選填）</label>
+            <input id="purchase-price" className="contact-field" type="number" inputMode="decimal" min="0" step="any"
+              value={price} onChange={(e) => setPrice(e.target.value)} />
           </div>
-          <div className="row" style={{ gap: 10 }}>
-            <div className="field" style={{ flex: 1, minWidth: 0 }}>
-              <label htmlFor="purchase-cost">每件成本</label>
-              <input id="purchase-cost" className="contact-field" type="number" inputMode="decimal" min="0" step="any"
-                value={cost} onChange={(event) => setCost(event.target.value)} required />
-            </div>
-            <div className="field" style={{ flex: 1, minWidth: 0 }}>
-              <label htmlFor="purchase-price">每件售價</label>
-              <input id="purchase-price" className="contact-field" type="number" inputMode="decimal" min="0" step="any"
-                value={price} onChange={(event) => setPrice(event.target.value)} required />
-            </div>
-          </div>
-        </>}
+        </div>
         <div className="field">
           <label htmlFor="purchase-date">進貨日期</label>
-          <input id="purchase-date" className="contact-field" type="date" value={date} onInput={(e) => setDate(e.currentTarget.value)} onChange={(e) => setDate(e.target.value)} required />
+          <input id="purchase-date" className="contact-field" type="date" value={date}
+            onInput={(e) => setDate(e.currentTarget.value)} onChange={(e) => setDate(e.target.value)} required />
         </div>
         <div className="field">
           <label htmlFor="purchase-quantity">進貨件數</label>
           <input id="purchase-quantity" className="contact-field" type="number" inputMode="numeric" min="1" step="1"
-            value={quantity} onChange={(event) => setQuantity(event.target.value)} required />
+            value={quantity} onChange={(e) => setQuantity(e.target.value)} required />
         </div>
         <div className="field">
-          <label htmlFor="purchase-received">已入庫件數</label>
-          <input id="purchase-received" className="contact-field" type="number" inputMode="numeric" min="0" max={quantity} step="1" disabled={!!purchase && !existing && productId === purchase.productId}
+          <label htmlFor="purchase-received">已到貨件數</label>
+          <input id="purchase-received" className="contact-field" type="number" inputMode="numeric" min="0" max={quantity} step="1"
             value={received} onChange={(e) => setReceived(e.target.value)} required />
-          <p className="tiny muted">尚未到貨填 0；到貨時只依新增或減少的件數調整庫存。</p>
-          {!validReceived && <p role="alert" style={{ color: "var(--warn)" }}>已入庫件數須介於 0 與進貨件數之間。</p>}
-          {validReceived && !validStock && <p role="alert" style={{ color: "var(--warn)" }}>減少的入庫件數超過目前庫存，請先核對已售數量。</p>}
-          {validReceived && validStock && <p className="tiny num">儲存後，這款目前庫存為 {stockAfter} 件。</p>}
+          <p className="tiny muted">尚未到貨填 0，只用於追蹤這筆進貨的到貨進度。</p>
+          {!validReceived && <p role="alert" style={{ color: "var(--warn)" }}>已到貨件數須介於 0 與進貨件數之間。</p>}
         </div>
         <div className="field">
           <label htmlFor="purchase-supplier">供應商或單號（選填）</label>
-          <input id="purchase-supplier" className="contact-field" value={supplier} onChange={(event) => setSupplier(event.target.value)} />
+          <input id="purchase-supplier" className="contact-field" value={supplier} onChange={(e) => setSupplier(e.target.value)} />
         </div>
-        <button className="btn btn-primary btn-block" disabled={!validQuantity || !validReceived || !validStock || !validDate || !validProduct}>{purchase ? "儲存進貨變更" : "儲存進貨"}</button>
+        <button className="btn btn-primary btn-block" disabled={!valid || confirmDelete}>{purchase ? "儲存進貨變更" : "儲存進貨"}</button>
+        {purchase && !confirmDelete && <button type="button" className="btn btn-ghost btn-block" style={{ marginTop: 10, color: "var(--warn)" }}
+          onClick={() => setConfirmDelete(true)}><Icon name="trash" size={18} /> 刪除進貨記錄</button>}
+        {purchase && confirmDelete && <div role="alert" style={{ marginTop: 12, padding: 14, borderRadius: 14, background: "var(--warn-soft)" }}>
+          <p style={{ margin: "0 0 10px" }}>確定刪除「{purchase.name}」這筆進貨記錄？刪除後無法復原，庫存保持不變。</p>
+          <div className="row sale-actions" style={{ gap: 10 }}>
+            <button type="button" className="btn" onClick={() => setConfirmDelete(false)}>保留記錄</button>
+            <button type="button" className="btn" style={{ background: "var(--warn)", color: "white" }} onClick={() => onDelete(purchase)}>確認刪除</button>
+          </div>
+        </div>}
         <button type="button" className="btn btn-block" onClick={onClose}>取消</button>
       </form>
     </Sheet>
@@ -2520,8 +2507,9 @@ function ReceivePurchaseForm({ purchase, onReceive, onClose }) {
           <label htmlFor="received-quantity">本次到貨件數（待到 {remaining} 件）</label>
           <input id="received-quantity" className="contact-field" type="number" inputMode="numeric" min="1" max={remaining} step="1"
             value={quantity} onChange={(event) => setQuantity(event.target.value)} required />
+          <p className="tiny muted">僅更新進貨的到貨進度，不會增加庫存。</p>
         </div>
-        <button className="btn btn-primary btn-block" disabled={!valid}>確認入庫</button>
+        <button className="btn btn-primary btn-block" disabled={!valid}>確認到貨</button>
         <button type="button" className="btn btn-block" onClick={onClose}>取消</button>
       </form>
     </Sheet>
@@ -2535,7 +2523,7 @@ function PurchasesPage({ inventory, setInventory }) {
   const [receiveId, setReceiveId] = useState(null);
   const [editId, setEditId] = useState(null);
   const [editError, setEditError] = useState("");
-  const { products, purchases } = inventory;
+  const { purchases } = inventory;
   const editing = purchases.find((p) => p.id === editId);
   const pending = purchases.filter((purchase) => purchase.received < purchase.ordered);
   const selected = pending.find((purchase) => purchase.id === receiveId);
@@ -2555,14 +2543,14 @@ function PurchasesPage({ inventory, setInventory }) {
         <input type="search" aria-label="搜尋進貨" placeholder="搜尋商品、顏色、供應商或單號" value={query} onChange={(event) => setQuery(event.target.value)} />
       </div>
       <div className="section-title between">
-        <span>進貨／入庫紀錄</span>
+        <span>進貨記錄</span>
         <label className="margin-toggle tiny"><input type="checkbox" checked={pendingOnly} onChange={(event) => setPendingOnly(event.target.checked)} />只看待到貨</label>
       </div>
+      {editError && <p role="alert" style={{ color: "var(--warn)" }}>{editError}</p>}
       <div className="customer-list">
-        {visible.length === 0 && <p className="card customer-card muted">{query ? "找不到符合的紀錄" : pendingOnly ? "目前沒有待到貨的商品" : "還沒有進貨紀錄"}</p>}
+        {visible.length === 0 && <p className="card customer-card muted">{query ? "找不到符合的記錄" : pendingOnly ? "目前沒有待到貨的商品" : "還沒有進貨記錄"}</p>}
         {visible.map((purchase) => {
           const remaining = purchase.ordered - purchase.received;
-          const productExists = products.some((product) => product.id === purchase.productId);
           return (
             <div className="card customer-card" key={purchase.id}>
               <div className="between">
@@ -2570,39 +2558,31 @@ function PurchasesPage({ inventory, setInventory }) {
                 <span className={"badge " + (remaining ? "low" : "ok")}>{remaining ? "待到 " + remaining + " 件" : "已到齊"}</span>
               </div>
               <div className="tiny muted">{purchase.date}{purchase.supplier ? " ・ " + purchase.supplier : ""}</div>
-              <div className="between" style={{ marginTop: 8 }}>
-                <span className="tiny num">進貨 {purchase.ordered} 件 ・ 已入庫 {purchase.received} 件</span>
-              </div>
+              <div className="tiny num" style={{ marginTop: 8 }}>進貨 {purchase.ordered} 件 ・ 已到貨 {purchase.received} 件</div>
+              {purchase.cost != null && <div className="tiny muted num">每件成本 {NT(purchase.cost)}</div>}
               <div className="row sale-actions" style={{ gap: 8, marginTop: 10 }}>
                 <button className="restock-pill" aria-label={"編輯進貨 " + purchase.name + " " + purchase.date}
                   onClick={() => { setEditError(""); setEditId(purchase.id); }}>編輯進貨</button>
-                {remaining > 0 && <button className="restock-pill" disabled={!productExists}
-                  onClick={() => setReceiveId(purchase.id)}>{productExists ? "登記到貨" : "商品已移除"}</button>}
+                {remaining > 0 && <button className="restock-pill" onClick={() => setReceiveId(purchase.id)}>登記到貨</button>}
               </div>
             </div>
           );
         })}
       </div>
-      {adding && <PurchaseForm products={products} onClose={() => setAdding(false)} onSave={(purchase, product) => {
-        setInventory((current) => {
-          if (current.purchases.some((entry) => entry.id === purchase.id)) return current;
-          if (!product && !current.products.some((item) => item.id === purchase.productId)) return current;
-          return {
-            ...current,
-            products: product ? [{ ...product, stock: purchase.received }, ...current.products]
-              : current.products.map((p) => p.id === purchase.productId ? { ...p, stock: (Number(p.stock) || 0) + purchase.received } : p),
-            purchases: [purchase, ...current.purchases]
-          };
-        });
+      {adding && <PurchaseForm onClose={() => setAdding(false)} onSave={(purchase) => {
+        setInventory((current) => addPurchase(current, purchase));
         setAdding(false);
         setQuery("");
       }} />}
-      {editError && <p role="alert" style={{ color: "var(--warn)" }}>{editError}</p>}
-      {editing && <PurchaseForm key={editing.id} products={products} purchase={editing} onClose={() => setEditId(null)}
+      {editing && <PurchaseForm key={editing.id} purchase={editing} onClose={() => setEditId(null)}
         onSave={(updated) => {
           const error = purchaseEditError(inventory, editing, updated);
-          if (error) { setEditError(error); return; }
+          if (error) { setEditError(error); setEditId(null); return; }
           setInventory((current) => editPurchase(current, editing, updated));
+          setEditId(null);
+        }}
+        onDelete={(original) => {
+          setInventory((current) => deletePurchase(current, original));
           setEditId(null);
         }} />}
       {selected && <ReceivePurchaseForm key={selected.id} purchase={selected} onClose={() => setReceiveId(null)}
@@ -2802,7 +2782,7 @@ const TABS = [
   { id: "stats", label: "統計", icon: "chart" }
 ];
 
-const APP_VERSION = "V3.5";
+const APP_VERSION = "V3.6";
 
 function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
@@ -2814,21 +2794,6 @@ function App() {
   const setProducts = (update) => setInventory((current) => ({
     ...current, products: update(current.products)
   }));
-  const restock = (productId, amount) => {
-    const receiptId = uid();
-    const date = todayISO();
-    setInventory((current) => {
-      const product = current.products.find((p) => p.id === productId);
-      const nextStock = (Number(product?.stock) || 0) + amount;
-      if (!product || !Number.isSafeInteger(amount) || amount <= 0 || !Number.isSafeInteger(nextStock)) return current;
-      return {
-        ...current,
-        products: current.products.map((p) => p.id === productId ? { ...p, stock: nextStock } : p),
-        purchases: [{ id: receiptId, productId, name: product.name, variant: product.variant || "", date,
-          supplier: "庫存頁補貨", ordered: amount, received: amount }, ...current.purchases]
-      };
-    });
-  };
   const [orders, setOrders] = usePersistentState("orders", []);
   const [customers, setCustomers] = usePersistentState("customers", []);
   const saveCustomer = (customer) => setCustomers((prev) =>
@@ -2904,9 +2869,9 @@ function App() {
         <button type="button" className="restock-pill" onClick={() => setTab("stats")}>前往匯出備份</button>
       </div>}
       <div className="app-body" key={tab}>
-        {tab === "price" && <PricingPage products={products} setProducts={setProducts} defaultMargin={t.defaultMargin} tags={tags} setTags={setTags} purchases={purchases} />}
+        {tab === "price" && <PricingPage products={products} setProducts={setProducts} defaultMargin={t.defaultMargin} tags={tags} setTags={setTags} />}
         {tab === "purchases" && <PurchasesPage inventory={inventory} setInventory={setInventory} />}
-        {tab === "orders" && <InventoryPage products={products} setProducts={setProducts} orders={orders} setOrders={setOrders} customers={customers} onSaveCustomer={saveCustomer} onRestock={restock} />}
+        {tab === "orders" && <InventoryPage products={products} setProducts={setProducts} orders={orders} setOrders={setOrders} customers={customers} onSaveCustomer={saveCustomer} />}
         {tab === "customers" && <CustomersPage customers={customers} orders={orders} onSave={saveCustomer} />}
         {tab === "stats" && <StatsPage orders={orders} inventory={inventory} customers={customers} />}
       </div>
