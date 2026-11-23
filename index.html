@@ -1986,7 +1986,7 @@ window.CustomersPage = CustomersPage;
    - 圈選賣出（每點一下扣 1 件、記一筆銷售）
    =========================================================== */
 
-function ProductEditForm({ product, products, onSave, onClose }) {
+function ProductEditForm({ product, products, onSave, onDelete, onClose }) {
   const [name, setName] = useState(product.name);
   const [variant, setVariant] = useState(product.variant || "");
   const [cost, setCost] = useState(String(product.cost));
@@ -1994,6 +1994,7 @@ function ProductEditForm({ product, products, onSave, onClose }) {
   const [stock, setStock] = useState(String(product.stock || 0));
   const [images, setImages] = useState(() => productPhotos(product));
   const [busy, setBusy] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const duplicate = products.some((p) => p.id !== product.id && p.name === name.trim() && (p.variant || "") === variant.trim());
   const valid = name.trim() && !duplicate && cost !== "" && Number.isFinite(Number(cost)) && Number(cost) >= 0 &&
     price !== "" && Number.isFinite(Number(price)) && Number(price) > 0 && stock !== "" &&
@@ -2002,7 +2003,7 @@ function ProductEditForm({ product, products, onSave, onClose }) {
     <Sheet title="編輯庫存商品" onClose={busy ? () => {} : onClose}>
       <form onSubmit={(event) => {
         event.preventDefault();
-        if (valid) onSave({ ...product, name: name.trim(), variant: variant.trim(), cost: Number(cost), price: Number(price),
+        if (valid && !confirmDelete) onSave({ ...product, name: name.trim(), variant: variant.trim(), cost: Number(cost), price: Number(price),
           stock: Number(stock), margin: Math.round(marginFromPrice(Number(cost), Number(price))), images, img: images[0] || null });
       }}>
         <div className="field"><label htmlFor="edit-product-name">商品名稱</label>
@@ -2021,7 +2022,19 @@ function ProductEditForm({ product, products, onSave, onClose }) {
           <p className="tiny muted">用於盤點修正，只改目前庫存；進貨記錄與已售訂單會保留。</p></div>
         <div className="field"><label>商品照片（選填）</label>
           <MultiPhotoPicker value={images} onChange={setImages} busy={busy} onBusy={setBusy} /></div>
-        <button className="btn btn-primary btn-block" disabled={!valid}>{busy ? "照片處理中…" : "儲存庫存變更"}</button>
+        <button className="btn btn-primary btn-block" disabled={!valid || confirmDelete}>{busy ? "照片處理中…" : "儲存庫存變更"}</button>
+        {!confirmDelete && <button type="button" className="btn btn-ghost btn-block" disabled={busy}
+          style={{ marginTop: 10, color: "var(--warn)" }} onClick={() => setConfirmDelete(true)}>
+          <Icon name="trash" size={18} /> 刪除庫存記錄
+        </button>}
+        {confirmDelete && <div role="alert" style={{ marginTop: 12, padding: 14, borderRadius: 14, background: "var(--warn-soft)" }}>
+          <p style={{ margin: "0 0 8px" }}>確定刪除「{product.name}{product.variant ? " ・ " + product.variant : ""}」這筆庫存記錄？刪除後無法復原。</p>
+          <p className="tiny" style={{ margin: "0 0 10px" }}>只刪除此款商品的庫存資料與照片，進貨記錄及既有銷售訂單會保留。</p>
+          <div className="row sale-actions" style={{ gap: 10 }}>
+            <button type="button" className="btn" disabled={busy} onClick={() => setConfirmDelete(false)}>保留記錄</button>
+            <button type="button" className="btn" disabled={busy} style={{ background: "var(--warn)", color: "white" }} onClick={() => onDelete(product.id)}>確認刪除</button>
+          </div>
+        </div>}
         <button type="button" className="btn btn-block" disabled={busy} onClick={onClose}>取消</button>
       </form>
     </Sheet>
@@ -2334,6 +2347,9 @@ function InventoryPage({ products, setProducts, orders, setOrders, customers, on
       {editingProduct && <ProductEditForm key={editingProduct.id} product={editingProduct} products={products}
         onClose={() => setEditId(null)} onSave={(product) => {
           setProducts((current) => current.map((p) => p.id === product.id ? { ...p, ...product } : p));
+          setEditId(null);
+        }} onDelete={(productId) => {
+          setProducts((current) => current.filter((product) => product.id !== productId));
           setEditId(null);
         }} />}
 
@@ -2782,7 +2798,7 @@ const TABS = [
   { id: "stats", label: "統計", icon: "chart" }
 ];
 
-const APP_VERSION = "V3.6";
+const APP_VERSION = "V3.7";
 
 function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
