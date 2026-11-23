@@ -971,7 +971,7 @@ const store = {
     } catch (e) { return fallback; }
   },
   set(key, val) {
-    try { localStorage.setItem(STORE_PREFIX + key, JSON.stringify(val)); } catch (e) {}
+    try { localStorage.setItem(STORE_PREFIX + key, JSON.stringify(val)); return true; } catch (e) { return false; }
   }
 };
 
@@ -1123,12 +1123,20 @@ function compressImage(file, maxSize = 360, quality = 0.78) {
   });
 }
 
+const MAX_PRODUCT_PHOTOS = 6;
+function productPhotos(product) {
+  const source = Array.isArray(product.images) ? product.images : product.img ? [product.img] : [];
+  return source.filter((src) => typeof src === "string" && src.length > 0).slice(0, MAX_PRODUCT_PHOTOS);
+}
+
 /* ---- 商品縮圖（有圖顯示圖，沒圖顯示柔和占位；有圖可點擊放大） ---- */
-function Thumb({ src, size = 46, radius = 13, zoomable = true }) {
+function Thumb({ src, photos, size = 46, radius = 13, zoomable = true }) {
+  const gallery = photos && photos.length ? photos : src ? [src] : [];
+  src = gallery[0];
   const clickable = src && zoomable;
   return (
     <div
-      onClick={clickable ? (e) => { e.stopPropagation(); window.openImageViewer && window.openImageViewer(src); } : undefined}
+      onClick={clickable ? (e) => { e.stopPropagation(); window.openImageViewer && window.openImageViewer(gallery); } : undefined}
       style={{ width: size, height: size, borderRadius: radius, flexShrink: 0, overflow: "hidden",
       background: src ? "var(--surface-2)" : "var(--accent-soft)",
       display: "grid", placeItems: "center", color: "var(--accent-deep)",
@@ -1137,59 +1145,99 @@ function Thumb({ src, size = 46, radius = 13, zoomable = true }) {
       {src
         ? <img src={src} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
         : <Icon name="tag" size={Math.round(size * 0.44)} />}
+      {gallery.length > 1 && <span style={{ position: "absolute", right: 0, bottom: 0, background: "rgba(0,0,0,.65)", color: "white", padding: "1px 4px", fontSize: 12, borderTopLeftRadius: 6 }}>{gallery.length}張</span>}
     </div>
   );
 }
 
 /* ---- 圖片放大檢視（全螢幕，點背景或叉叉關閉） ---- */
 function ImageViewer({ src, onClose }) {
+  const photos = Array.isArray(src) ? src : src ? [src] : [];
+  const [index, setIndex] = useState(0);
+  useEffect(() => { setIndex(0); }, [src]);
   useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    const onKey = (e) => {
+      if (e.key === "Escape") onClose();
+      if (photos.length > 1 && e.key === "ArrowRight") setIndex((i) => (i + 1) % photos.length);
+      if (photos.length > 1 && e.key === "ArrowLeft") setIndex((i) => (i + photos.length - 1) % photos.length);
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-  if (!src) return null;
+  }, [onClose, photos.length]);
+  if (!photos.length) return null;
   return (
-    <div className="lightbox" onClick={onClose}>
-      <button className="lb-close" onClick={onClose}><Icon name="close" size={22} /></button>
-      <img src={src} alt="" className="lb-img" onClick={(e) => e.stopPropagation()} />
+    <div className="lightbox" role="dialog" aria-modal="true" aria-label="商品照片" onClick={onClose}>
+      <button type="button" aria-label="關閉照片" className="lb-close" onClick={onClose}><Icon name="close" size={22} /></button>
+      <img src={photos[index] || photos[0]} alt={"商品照片 " + (index + 1)} className="lb-img" onClick={(e) => e.stopPropagation()} />
+      {photos.length > 1 && <div className="row" onClick={(e) => e.stopPropagation()}
+        style={{ position: "absolute", bottom: "max(28px, env(safe-area-inset-bottom))", gap: 18, color: "white" }}>
+        <button type="button" className="btn" onClick={() => setIndex((i) => (i + photos.length - 1) % photos.length)}>上一張</button>
+        <span className="num" aria-live="polite">{index + 1} / {photos.length}</span>
+        <button type="button" className="btn" onClick={() => setIndex((i) => (i + 1) % photos.length)}>下一張</button>
+      </div>}
     </div>
   );
 }
 
 /* ---- 拍照／選圖 按鈕（大方框，可更換、可移除） ---- */
-function PhotoPicker({ value, onChange, busy, onBusy }) {
+function PhotoPicker({ value, onChange, busy, onBusy, label = "商品照片" }) {
   const inputRef = useRef(null);
+  const [error, setError] = useState("");
   const pick = async (e) => {
     const file = e.target.files && e.target.files[0];
     e.target.value = "";
-    if (!file) return;
+    if (!file || busy) return;
+    setError("");
     onBusy && onBusy(true);
     try { const data = await compressImage(file); onChange(data); }
-    catch (err) { /* ignore */ }
-    onBusy && onBusy(false);
+    catch (err) { setError("照片讀取失敗，請改選其他圖片。"); }
+    finally { onBusy && onBusy(false); }
   };
   return (
     <div>
-      <input ref={inputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={pick} />
+      <input ref={inputRef} type="file" accept="image/*" aria-label={label} disabled={busy} style={{ display: "none" }} onChange={pick} />
       {value ? (
         <div style={{ position: "relative", width: "100%", aspectRatio: "1 / 1", maxHeight: 200, borderRadius: 18, overflow: "hidden", border: "1px solid var(--line)" }}>
           <img src={value} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
           <div style={{ position: "absolute", right: 8, bottom: 8, display: "flex", gap: 8 }}>
-            <button onClick={() => inputRef.current.click()}
+            <button type="button" disabled={busy} onClick={() => inputRef.current.click()}
               style={{ border: "none", background: "rgba(70,58,46,.72)", color: "#fff", borderRadius: 999, padding: "8px 13px", fontSize: 13, fontWeight: 700, cursor: "pointer", backdropFilter: "blur(4px)", fontFamily: "var(--font-body)" }}>更換</button>
-            <button onClick={() => onChange(null)}
+            <button type="button" disabled={busy} aria-label={"移除" + label} onClick={() => onChange(null)}
               style={{ border: "none", background: "rgba(70,58,46,.72)", color: "#fff", borderRadius: 999, width: 36, height: 36, display: "grid", placeItems: "center", cursor: "pointer", backdropFilter: "blur(4px)" }}><Icon name="close" size={16} /></button>
           </div>
         </div>
       ) : (
-        <button onClick={() => inputRef.current.click()} disabled={busy}
+        <button type="button" disabled={busy} aria-label={"加入" + label} onClick={() => inputRef.current.click()}
           style={{ width: "100%", padding: "26px 16px", border: "1.5px dashed var(--line)", background: "var(--surface)", borderRadius: 18, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 8, color: "var(--accent-deep)", fontFamily: "var(--font-body)" }}>
           <Icon name="camera" size={28} />
           <span style={{ fontWeight: 700, fontSize: 14.5 }}>{busy ? "處理中…" : "拍照 / 選擇商品照片"}</span>
           <span className="tiny muted">點一下開啟相機或相簿</span>
         </button>
       )}
+      {error && <p className="tiny" role="alert" style={{ color: "var(--warn)" }}>{error}</p>}
+    </div>
+  );
+}
+
+function MultiPhotoPicker({ value, onChange, busy, onBusy }) {
+  const count = Math.max(2, Math.min(MAX_PRODUCT_PHOTOS, value.length + 1));
+  return (
+    <div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
+        {Array.from({ length: count }, (_, index) => (
+          <div key={index}>
+            <div className="tiny muted" style={{ marginBottom: 6 }}>照片 {index + 1}{index === 0 ? "（封面）" : ""}</div>
+            <PhotoPicker value={value[index]} label={"商品照片 " + (index + 1)} busy={busy} onBusy={onBusy}
+              onChange={(photo) => {
+                const next = [...value];
+                if (photo) next[index] = photo;
+                else next.splice(index, 1);
+                onChange(next.filter(Boolean));
+              }} />
+          </div>
+        ))}
+      </div>
+      <p className="tiny muted">每款最多 6 張，照片選填。第一張為封面，點商品縮圖可逐張放大查看。</p>
     </div>
   );
 }
@@ -1208,22 +1256,20 @@ Object.assign(window, {
    （全部讀寫 localStorage，匯入後重新載入頁面）
    =========================================================== */
 
-function BackupCard() {
+function BackupCard({ inventory: liveInventory, orders: liveOrders, customers: liveCustomers }) {
   const fileRef = useRef(null);
   const [msg, setMsg] = useState(null); // { type:'ok'|'err', text }
 
-  const { products, purchases } = readInventory();
-  const orders = store.get("orders", []);
-  const customers = store.get("customers", []);
+  const { products, purchases } = liveInventory || readInventory();
+  const orders = liveOrders || store.get("orders", []);
+  const customers = liveCustomers || store.get("customers", []);
 
   const flash = (type, text) => { setMsg({ type, text }); setTimeout(() => setMsg(null), 4000); };
 
   const doExport = () => {
     const payload = {
-      app: "iuaM", version: 3, exportedAt: new Date().toISOString(),
-      ...readInventory(),
-      orders: store.get("orders", []),
-      customers: store.get("customers", [])
+      app: "iuaM", version: 4, exportedAt: new Date().toISOString(),
+      ...(liveInventory || readInventory()), orders, customers
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -1253,10 +1299,13 @@ function BackupCard() {
           return;
         }
         const ok = window.confirm(
-          "確定要還原這個備份嗎？\n\n備份內容：商品 " + data.products.length + " 件、訂單 " + data.orders.length + " 筆、客戶 " + (data.customers || []).length + " 位、叫貨 " + (data.purchases || []).length + " 筆。\n\n⚠️ 這會「覆蓋」你目前的資料。"
+          "確定要還原這個備份嗎？\n\n備份內容：商品 " + data.products.length + " 件、訂單 " + data.orders.length + " 筆、客戶 " + (data.customers || []).length + " 位、進貨 " + (data.purchases || []).length + " 筆。\n\n⚠️ 這會「覆蓋」你目前的資料。"
         );
         if (!ok) return;
-        store.set("products", { products: data.products, purchases: data.purchases || [] });
+        if (!store.set("products", { products: data.products, purchases: data.purchases || [] })) {
+          flash("err", "儲存空間不足或無法寫入，未能還原備份，原資料已保留。");
+          return;
+        }
         store.set("orders", data.orders);
         store.set("customers", data.customers || []);
         flash("ok", "還原成功，正在重新整理…");
@@ -1278,7 +1327,7 @@ function BackupCard() {
           <span style={{ color: "var(--accent-deep)" }}><Icon name="shield" size={20} /></span>
           <div>
             <div style={{ fontWeight: 700, fontSize: 14.5 }}>目前資料</div>
-            <div className="tiny muted num">商品 {products.length} 件 ・ 訂單 {orders.length} 筆 ・ 客戶 {customers.length} 位 ・ 叫貨 {purchases.length} 筆</div>
+            <div className="tiny muted num">商品 {products.length} 件 ・ 訂單 {orders.length} 筆 ・ 客戶 {customers.length} 位 ・ 進貨 {purchases.length} 筆</div>
           </div>
         </div>
 
@@ -1301,7 +1350,7 @@ function BackupCard() {
         )}
 
         <div className="tiny muted" style={{ marginTop: 12, lineHeight: 1.6 }}>
-          備份包含商品、銷售訂單、客戶與叫貨資料。換手機時，可用「匯入還原」載入備份。
+          備份包含商品、銷售訂單、客戶與進貨資料。換手機時，可用「匯入還原」載入備份。
         </div>
       </div>
     </div>
@@ -1338,7 +1387,7 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags, purc
   const [name, setName] = useState("");
   const [variant, setVariant] = useState("");
   const [stockQty, setStockQty] = useState(1);
-  const [img, setImg] = useState(null);
+  const [images, setImages] = useState([]);
   const [imgBusy, setImgBusy] = useState(false);
   const [editId, setEditId] = useState(null);
   const [managingTags, setManagingTags] = useState(false);
@@ -1395,18 +1444,18 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags, purc
     else if (pp > 0) setCost(String(Math.round(pp * (1 - Math.min(m, 95) / 100))));
   };
 
-  const reset = () => { setCost(""); setPrice(""); setMargin(defaultMargin); setName(""); setVariant(""); setStockQty(1); setImg(null); setEditId(null); };
+  const reset = () => { setCost(""); setPrice(""); setMargin(defaultMargin); setName(""); setVariant(""); setStockQty(1); setImages([]); setEditId(null); };
 
   const saveProduct = (keepAdding = false) => {
     if (c <= 0 || pr <= 0 || !name.trim()) return;
-    const item = { id: editId || uid(), name: name.trim(), variant: variant.trim(), cost: c, price: pr, margin: Math.round(effMargin), stock: Math.max(0, stockQty), img: img || null };
-    setProducts((prev) => editId ? prev.map((p) => p.id === editId ? item : p) : [item, ...prev]);
+    const item = { id: editId || uid(), name: name.trim(), variant: variant.trim(), cost: c, price: pr, margin: Math.round(effMargin), stock: Math.max(0, stockQty), images, img: images[0] || null };
+    setProducts((prev) => editId ? prev.map((p) => p.id === editId ? { ...p, ...item } : p) : [item, ...prev]);
     addTag("name", name.trim()); // 自動把用過的名稱收進標籤
     if (keepAdding) {
       setSavedVariant(item.variant || item.name);
       setVariant("");
       setStockQty(1);
-      setImg(null);
+      setImages([]);
       return;
     }
     setSavedVariant(null);
@@ -1415,7 +1464,7 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags, purc
 
   const editProduct = (p) => {
     setCost(String(p.cost)); setPrice(String(p.price)); setMargin(Math.min(90, Math.max(5, p.margin ?? defaultMargin)));
-    setName(p.name); setVariant(p.variant || ""); setStockQty(p.stock || 0); setImg(p.img || null); setEditId(p.id);
+    setName(p.name); setVariant(p.variant || ""); setStockQty(p.stock || 0); setImages(productPhotos(p)); setEditId(p.id);
     setSaving(true);
   };
 
@@ -1426,7 +1475,7 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags, purc
     setName(p.name);
     setVariant("");
     setStockQty(1);
-    setImg(p.img || null);
+    setImages(productPhotos(p));
     setEditId(null);
     setSaving(true);
   };
@@ -1487,7 +1536,7 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags, purc
 
       {/* 商品庫 */}
       <div className="section-title">
-        進貨紀錄 <span className="sub">{products.length} 件</span>
+        商品資料 <span className="sub">{products.length} 件</span>
       </div>
 
       {products.length === 0 ? (
@@ -1500,7 +1549,7 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags, purc
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {products.map((p) => (
             <div key={p.id} className="card" style={{ padding: "14px 16px", display: "flex", alignItems: "center", gap: 12 }}>
-              <Thumb src={p.img} size={46} />
+              <Thumb src={p.img} photos={productPhotos(p)} size={46} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 700, fontSize: 15, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                   {p.name}{p.variant ? <span className="muted" style={{ fontWeight: 500, fontSize: 13 }}> ・ {p.variant}</span> : null}
@@ -1588,7 +1637,7 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags, purc
 
           <div className="field">
             <label>商品照片（選填）</label>
-            <PhotoPicker value={img} onChange={setImg} busy={imgBusy} onBusy={setImgBusy} />
+            <MultiPhotoPicker value={images} onChange={setImages} busy={imgBusy} onBusy={setImgBusy} />
           </div>
           <div className="row" style={{ gap: 10, margin: "4px 0 14px", flexWrap: "wrap" }}>
             <div className="card" style={{ flex: 1, padding: "10px 14px", boxShadow: "none" }}>
@@ -1628,10 +1677,10 @@ function PricingPage({ products, setProducts, defaultMargin, tags, setTags, purc
                 <Icon name="trash" size={18} />
               </button>
             )}
-            {!editId && <button className="btn btn-ghost" style={{ flex: 1 }} disabled={!name.trim()} onClick={() => saveProduct(true)}>
+            {!editId && <button className="btn btn-ghost" style={{ flex: 1 }} disabled={!name.trim() || imgBusy} onClick={() => saveProduct(true)}>
               儲存並繼續加入
             </button>}
-            <button className="btn btn-primary" style={{ flex: 1 }} disabled={!name.trim()} onClick={() => saveProduct()}>
+            <button className="btn btn-primary" style={{ flex: 1 }} disabled={!name.trim() || imgBusy} onClick={() => saveProduct()}>
               {editId ? "儲存變更" : "加入商品庫"}
             </button>
           </div>
@@ -1925,7 +1974,51 @@ window.CustomersPage = CustomersPage;
    - 圈選賣出（每點一下扣 1 件、記一筆銷售）
    =========================================================== */
 
-function InventoryPage({ products, setProducts, orders, setOrders, customers, onSaveCustomer }) {
+function ProductEditForm({ product, products, onSave, onClose }) {
+  const [name, setName] = useState(product.name);
+  const [variant, setVariant] = useState(product.variant || "");
+  const [cost, setCost] = useState(String(product.cost));
+  const [price, setPrice] = useState(String(product.price));
+  const [stock, setStock] = useState(String(product.stock || 0));
+  const [images, setImages] = useState(() => productPhotos(product));
+  const [busy, setBusy] = useState(false);
+  const duplicate = products.some((p) => p.id !== product.id && p.name === name.trim() && (p.variant || "") === variant.trim());
+  const valid = name.trim() && !duplicate && cost !== "" && Number.isFinite(Number(cost)) && Number(cost) >= 0 &&
+    price !== "" && Number.isFinite(Number(price)) && Number(price) > 0 && stock !== "" &&
+    Number.isSafeInteger(Number(stock)) && Number(stock) >= 0 && !busy;
+  return (
+    <Sheet title="編輯庫存商品" onClose={busy ? () => {} : onClose}>
+      <form onSubmit={(event) => {
+        event.preventDefault();
+        if (valid) onSave({ ...product, name: name.trim(), variant: variant.trim(), cost: Number(cost), price: Number(price),
+          stock: Number(stock), margin: Math.round(marginFromPrice(Number(cost), Number(price))), images, img: images[0] || null });
+      }}>
+        <div className="field"><label htmlFor="edit-product-name">商品名稱</label>
+          <input id="edit-product-name" className="contact-field" value={name} onChange={(e) => setName(e.target.value)} required /></div>
+        <div className="field"><label htmlFor="edit-product-variant">顏色／尺寸（選填）</label>
+          <input id="edit-product-variant" className="contact-field" value={variant} onChange={(e) => setVariant(e.target.value)} /></div>
+        {duplicate && <p role="alert" style={{ color: "var(--warn)" }}>已有同名、同款商品，請使用不同名稱或顏色／尺寸。</p>}
+        <div className="row" style={{ gap: 10 }}>
+          <div className="field" style={{ flex: 1, minWidth: 0 }}><label htmlFor="edit-product-cost">每件成本</label>
+            <input id="edit-product-cost" className="contact-field" type="number" inputMode="decimal" min="0" step="any" value={cost} onChange={(e) => setCost(e.target.value)} required /></div>
+          <div className="field" style={{ flex: 1, minWidth: 0 }}><label htmlFor="edit-product-price">每件售價</label>
+            <input id="edit-product-price" className="contact-field" type="number" inputMode="decimal" min="0.01" step="any" value={price} onChange={(e) => setPrice(e.target.value)} required /></div>
+        </div>
+        <div className="field"><label htmlFor="edit-product-stock">目前剩餘庫存</label>
+          <input id="edit-product-stock" className="contact-field" type="number" inputMode="numeric" min="0" step="1" value={stock} onChange={(e) => setStock(e.target.value)} required />
+          <p className="tiny muted">用於盤點修正，只改目前庫存；進貨／入庫紀錄與已售訂單會保留。</p></div>
+        <div className="field"><label>商品照片（選填）</label>
+          <MultiPhotoPicker value={images} onChange={setImages} busy={busy} onBusy={setBusy} /></div>
+        <button className="btn btn-primary btn-block" disabled={!valid}>{busy ? "照片處理中…" : "儲存庫存變更"}</button>
+        <button type="button" className="btn btn-block" disabled={busy} onClick={onClose}>取消</button>
+      </form>
+    </Sheet>
+  );
+}
+
+function InventoryPage({ products, setProducts, orders, setOrders, customers, onSaveCustomer, onRestock }) {
+  const [editId, setEditId] = useState(null);
+  const editingProduct = products.find((p) => p.id === editId);
   const [buyerTarget, setBuyerTarget] = useState(null);
   const [variantSale, setVariantSale] = useState(null);
   const [showAllSales, setShowAllSales] = useState(false);
@@ -1975,7 +2068,7 @@ function InventoryPage({ products, setProducts, orders, setOrders, customers, on
   };
 
   const doRestock = () => {
-    setProducts((prev) => prev.map((x) => x.id === restockId ? { ...x, stock: (x.stock || 0) + restockQty } : x));
+    onRestock(restockId, restockQty);
     setRestockId(null); setRestockQty(5);
   };
 
@@ -2049,7 +2142,7 @@ function InventoryPage({ products, setProducts, orders, setOrders, customers, on
           {out ? <span className="lbl">售完</span> : (pop === p.id ? <Icon name="check" size={24} /> : <span className="dot" />)}
         </button>
 
-        <Thumb src={p.img} size={nested ? 44 : 48} radius={nested ? 11 : 12} />
+        <Thumb src={p.img} photos={productPhotos(p)} size={nested ? 44 : 48} radius={nested ? 11 : 12} />
 
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: nested ? 14.5 : 15.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -2065,6 +2158,7 @@ function InventoryPage({ products, setProducts, orders, setOrders, customers, on
             <button className="restock-pill" onClick={() => { setRestockId(p.id); setRestockQty(5); }}>
               <Icon name="restock" size={14} /> 補貨
             </button>
+            <button className="restock-pill" aria-label={"編輯庫存 " + p.name + (p.variant ? " " + p.variant : "")} onClick={() => setEditId(p.id)}>編輯</button>
             {!out && <button className="restock-pill" onClick={() => setBuyerTarget({ product: p })}>賣給客戶</button>}
           </div>
         </div>
@@ -2222,6 +2316,12 @@ function InventoryPage({ products, setProducts, orders, setOrders, customers, on
       )}
 
       {/* 補貨表單 */}
+      {editingProduct && <ProductEditForm key={editingProduct.id} product={editingProduct} products={products}
+        onClose={() => setEditId(null)} onSave={(product) => {
+          setProducts((current) => current.map((p) => p.id === product.id ? { ...p, ...product } : p));
+          setEditId(null);
+        }} />}
+
       {restockId && (() => {
         const p = products.find((x) => x.id === restockId);
         if (!p) return null;
@@ -2260,11 +2360,13 @@ window.InventoryPage = InventoryPage;
 <script type="text/babel" data-src="purchases.jsx">
 function receivePurchase(inventory, id, previouslyReceived, amount) {
   const purchase = inventory.purchases.find((entry) => entry.id === id);
+  const product = inventory.products.find((entry) => entry.id === purchase?.productId);
   if (!purchase || purchase.received !== previouslyReceived ||
       !Number.isSafeInteger(amount) || amount < 1 || amount > purchase.ordered - purchase.received ||
-      !inventory.products.some((product) => product.id === purchase.productId)) return inventory;
+      !product || !Number.isSafeInteger((Number(product.stock) || 0) + amount)) return inventory;
 
   return {
+    ...inventory,
     products: inventory.products.map((product) => product.id === purchase.productId
       ? { ...product, stock: (Number(product.stock) || 0) + amount } : product),
     purchases: inventory.purchases.map((entry) => entry.id === id
@@ -2272,51 +2374,84 @@ function receivePurchase(inventory, id, previouslyReceived, amount) {
   };
 }
 
-function PurchaseForm({ products, onSave, onClose }) {
-  const [productId, setProductId] = useState("");
+function purchaseEditError(inventory, original, updated) {
+  const current = inventory.purchases.find((p) => p.id === original.id);
+  if (!current || JSON.stringify(current) !== JSON.stringify(original)) return "這筆進貨已更新，請關閉後重新編輯。";
+  if (!validPurchase(updated) || updated.id !== original.id) return "請確認進貨件數與已入庫件數。";
+  const product = inventory.products.find((p) => p.id === updated.productId);
+  if (!product) return updated.productId === original.productId && updated.received === original.received
+    ? "" : "原商品已移除，已入庫件數須維持原值。";
+  if (original.received > 0 && original.productId !== updated.productId) return "已有入庫紀錄，無法改到其他商品。";
+  const stock = Number(product.stock) || 0;
+  const nextStock = stock + updated.received - original.received;
+  if (!Number.isSafeInteger(nextStock) || nextStock < 0) return "減少的入庫件數超過目前庫存，請先核對已售數量。";
+  return "";
+}
+
+function editPurchase(inventory, original, updated) {
+  if (purchaseEditError(inventory, original, updated)) return inventory;
+  const delta = updated.received - original.received;
+  return {
+    ...inventory,
+    products: inventory.products.map((p) => p.id === updated.productId ? { ...p, stock: (Number(p.stock) || 0) + delta } : p),
+    purchases: inventory.purchases.map((p) => p.id === original.id ? { ...p, ...updated } : p)
+  };
+}
+
+function PurchaseForm({ products, purchase = null, onSave, onClose }) {
+  const [productId, setProductId] = useState(purchase ? purchase.productId : "");
   const [name, setName] = useState("");
   const [variant, setVariant] = useState("");
   const [cost, setCost] = useState("");
   const [price, setPrice] = useState("");
-  const [quantity, setQuantity] = useState("1");
-  const [supplier, setSupplier] = useState("");
-  const isNew = productId === "new";
+  const [quantity, setQuantity] = useState(purchase ? String(purchase.ordered) : "1");
+  const [received, setReceived] = useState(purchase ? String(purchase.received) : "0");
+  const [supplier, setSupplier] = useState(purchase ? purchase.supplier : "");
+  const [date, setDate] = useState(purchase ? purchase.date : todayISO());
+  const isNew = !purchase && productId === "new";
   const existing = products.find((product) => product.id === productId);
   const matchingProduct = isNew && products.find((product) =>
     product.name === name.trim() && (product.variant || "") === variant.trim());
-  const validQuantity = Number.isSafeInteger(Number(quantity)) && Number(quantity) > 0;
-  const validProduct = existing || (isNew && name.trim() && !matchingProduct &&
+  const validQuantity = quantity !== "" && Number.isSafeInteger(Number(quantity)) && Number(quantity) > 0;
+  const validReceived = received !== "" && Number.isSafeInteger(Number(received)) && Number(received) >= 0 && Number(received) <= Number(quantity);
+  const stockAfter = (Number(existing?.stock) || 0) + Number(received) - (purchase?.received || 0);
+  const validStock = Number.isSafeInteger(stockAfter) && stockAfter >= 0;
+  const validDate = /^\d{4}-\d{2}-\d{2}$/.test(date) && Number.isFinite(Date.parse(date + "T00:00:00Z")) && new Date(date + "T00:00:00Z").toISOString().slice(0, 10) === date;
+  const validProduct = existing || (purchase && productId === purchase.productId && !existing && Number(received) === purchase.received) || (isNew && name.trim() && !matchingProduct &&
     Number.isFinite(Number(cost)) && cost !== "" && Number(cost) >= 0 &&
     Number.isFinite(Number(price)) && Number(price) > 0);
 
   const submit = (event) => {
     event.preventDefault();
-    if (!validQuantity || !validProduct) return;
-    const product = existing || {
+    if (!validQuantity || !validReceived || !validStock || !validDate || !validProduct) return;
+    const product = existing || (purchase && !isNew ? { id: purchase.productId, name: purchase.name, variant: purchase.variant } : {
       id: uid(), name: name.trim(), variant: variant.trim(), stock: 0,
       cost: Number(cost), price: Number(price),
-      margin: Math.round(marginFromPrice(Number(cost), Number(price))), img: null
-    };
+      margin: Math.round(marginFromPrice(Number(cost), Number(price))), img: null, images: []
+    });
     onSave({
-      id: uid(), productId: product.id, name: product.name, variant: product.variant || "",
-      supplier: supplier.trim(), date: todayISO(), ordered: Number(quantity), received: 0
-    }, existing ? null : product);
+      ...purchase, id: purchase ? purchase.id : uid(), productId: product.id, name: product.name, variant: product.variant || "",
+      supplier: supplier.trim(), date, ordered: Number(quantity), received: Number(received)
+    }, existing || purchase ? null : product);
   };
 
   return (
-    <Sheet title="新增叫貨" onClose={onClose}>
+    <Sheet title={purchase ? "編輯進貨／入庫紀錄" : "新增進貨"} onClose={onClose}>
       <form onSubmit={submit}>
         <div className="field">
           <label htmlFor="purchase-product">商品／款式</label>
-          <select id="purchase-product" className="contact-field" value={productId} onChange={(event) => setProductId(event.target.value)} required>
+          <select id="purchase-product" className="contact-field" value={productId} disabled={!!purchase?.received} onChange={(event) => setProductId(event.target.value)} required>
             <option value="">請選擇商品或新增款式</option>
-            <option value="new">＋ 新增商品／款式</option>
+            {!purchase && <option value="new">＋ 新增商品／款式</option>}
+            {purchase && !existing && <option value={purchase.productId}>原商品已移除，請選擇現有商品</option>}
             {products.map((product) => (
               <option key={product.id} value={product.id}>
                 {product.name}{product.variant ? " ・ " + product.variant : ""}（庫存 {product.stock || 0}）
               </option>
             ))}
           </select>
+          {!!purchase?.received && <p className="tiny muted">這筆已有入庫紀錄，商品款式固定。商品名稱、成本與售價請到庫存的「編輯」修改。</p>}
+          {purchase && !existing && <p className="tiny muted">原商品已移除，可修改進貨日期、供應商及進貨件數；已入庫件數須維持原值。</p>}
         </div>
         {isNew && <>
           <div className="field">
@@ -2342,15 +2477,28 @@ function PurchaseForm({ products, onSave, onClose }) {
           </div>
         </>}
         <div className="field">
-          <label htmlFor="purchase-quantity">叫貨件數</label>
+          <label htmlFor="purchase-date">進貨日期</label>
+          <input id="purchase-date" className="contact-field" type="date" value={date} onInput={(e) => setDate(e.currentTarget.value)} onChange={(e) => setDate(e.target.value)} required />
+        </div>
+        <div className="field">
+          <label htmlFor="purchase-quantity">進貨件數</label>
           <input id="purchase-quantity" className="contact-field" type="number" inputMode="numeric" min="1" step="1"
             value={quantity} onChange={(event) => setQuantity(event.target.value)} required />
+        </div>
+        <div className="field">
+          <label htmlFor="purchase-received">已入庫件數</label>
+          <input id="purchase-received" className="contact-field" type="number" inputMode="numeric" min="0" max={quantity} step="1" disabled={!!purchase && !existing && productId === purchase.productId}
+            value={received} onChange={(e) => setReceived(e.target.value)} required />
+          <p className="tiny muted">尚未到貨填 0；到貨時只依新增或減少的件數調整庫存。</p>
+          {!validReceived && <p role="alert" style={{ color: "var(--warn)" }}>已入庫件數須介於 0 與進貨件數之間。</p>}
+          {validReceived && !validStock && <p role="alert" style={{ color: "var(--warn)" }}>減少的入庫件數超過目前庫存，請先核對已售數量。</p>}
+          {validReceived && validStock && <p className="tiny num">儲存後，這款目前庫存為 {stockAfter} 件。</p>}
         </div>
         <div className="field">
           <label htmlFor="purchase-supplier">供應商或單號（選填）</label>
           <input id="purchase-supplier" className="contact-field" value={supplier} onChange={(event) => setSupplier(event.target.value)} />
         </div>
-        <button className="btn btn-primary btn-block" disabled={!validQuantity || !validProduct}>儲存叫貨</button>
+        <button className="btn btn-primary btn-block" disabled={!validQuantity || !validReceived || !validStock || !validDate || !validProduct}>{purchase ? "儲存進貨變更" : "儲存進貨"}</button>
         <button type="button" className="btn btn-block" onClick={onClose}>取消</button>
       </form>
     </Sheet>
@@ -2382,10 +2530,13 @@ function ReceivePurchaseForm({ purchase, onReceive, onClose }) {
 
 function PurchasesPage({ inventory, setInventory }) {
   const [query, setQuery] = useState("");
-  const [pendingOnly, setPendingOnly] = useState(true);
+  const [pendingOnly, setPendingOnly] = useState(false);
   const [adding, setAdding] = useState(false);
   const [receiveId, setReceiveId] = useState(null);
+  const [editId, setEditId] = useState(null);
+  const [editError, setEditError] = useState("");
   const { products, purchases } = inventory;
+  const editing = purchases.find((p) => p.id === editId);
   const pending = purchases.filter((purchase) => purchase.received < purchase.ordered);
   const selected = pending.find((purchase) => purchase.id === receiveId);
   const keyword = query.trim().toLowerCase();
@@ -2398,17 +2549,17 @@ function PurchasesPage({ inventory, setInventory }) {
         <strong>{pending.length} 筆待到貨</strong>
         <span className="num">共 {pending.reduce((sum, purchase) => sum + purchase.ordered - purchase.received, 0)} 件</span>
       </div>
-      <button className="btn btn-primary btn-block" style={{ marginTop: 12 }} onClick={() => setAdding(true)}>＋ 新增叫貨</button>
+      <button className="btn btn-primary btn-block" style={{ marginTop: 12 }} onClick={() => setAdding(true)}>＋ 新增進貨</button>
       <div className="searchbar">
         <Icon name="search" size={19} />
-        <input type="search" aria-label="搜尋叫貨" placeholder="搜尋商品、顏色、供應商或單號" value={query} onChange={(event) => setQuery(event.target.value)} />
+        <input type="search" aria-label="搜尋進貨" placeholder="搜尋商品、顏色、供應商或單號" value={query} onChange={(event) => setQuery(event.target.value)} />
       </div>
       <div className="section-title between">
-        <span>叫貨紀錄</span>
+        <span>進貨／入庫紀錄</span>
         <label className="margin-toggle tiny"><input type="checkbox" checked={pendingOnly} onChange={(event) => setPendingOnly(event.target.checked)} />只看待到貨</label>
       </div>
       <div className="customer-list">
-        {visible.length === 0 && <p className="card customer-card muted">{query ? "找不到符合的紀錄" : pendingOnly ? "目前沒有待到貨的商品" : "還沒有叫貨紀錄"}</p>}
+        {visible.length === 0 && <p className="card customer-card muted">{query ? "找不到符合的紀錄" : pendingOnly ? "目前沒有待到貨的商品" : "還沒有進貨紀錄"}</p>}
         {visible.map((purchase) => {
           const remaining = purchase.ordered - purchase.received;
           const productExists = products.some((product) => product.id === purchase.productId);
@@ -2420,7 +2571,11 @@ function PurchasesPage({ inventory, setInventory }) {
               </div>
               <div className="tiny muted">{purchase.date}{purchase.supplier ? " ・ " + purchase.supplier : ""}</div>
               <div className="between" style={{ marginTop: 8 }}>
-                <span className="tiny num">叫貨 {purchase.ordered} 件 ・ 已到 {purchase.received} 件</span>
+                <span className="tiny num">進貨 {purchase.ordered} 件 ・ 已入庫 {purchase.received} 件</span>
+              </div>
+              <div className="row sale-actions" style={{ gap: 8, marginTop: 10 }}>
+                <button className="restock-pill" aria-label={"編輯進貨 " + purchase.name + " " + purchase.date}
+                  onClick={() => { setEditError(""); setEditId(purchase.id); }}>編輯進貨</button>
                 {remaining > 0 && <button className="restock-pill" disabled={!productExists}
                   onClick={() => setReceiveId(purchase.id)}>{productExists ? "登記到貨" : "商品已移除"}</button>}
               </div>
@@ -2433,13 +2588,23 @@ function PurchasesPage({ inventory, setInventory }) {
           if (current.purchases.some((entry) => entry.id === purchase.id)) return current;
           if (!product && !current.products.some((item) => item.id === purchase.productId)) return current;
           return {
-            products: product ? [product, ...current.products] : current.products,
+            ...current,
+            products: product ? [{ ...product, stock: purchase.received }, ...current.products]
+              : current.products.map((p) => p.id === purchase.productId ? { ...p, stock: (Number(p.stock) || 0) + purchase.received } : p),
             purchases: [purchase, ...current.purchases]
           };
         });
         setAdding(false);
         setQuery("");
       }} />}
+      {editError && <p role="alert" style={{ color: "var(--warn)" }}>{editError}</p>}
+      {editing && <PurchaseForm key={editing.id} products={products} purchase={editing} onClose={() => setEditId(null)}
+        onSave={(updated) => {
+          const error = purchaseEditError(inventory, editing, updated);
+          if (error) { setEditError(error); return; }
+          setInventory((current) => editPurchase(current, editing, updated));
+          setEditId(null);
+        }} />}
       {selected && <ReceivePurchaseForm key={selected.id} purchase={selected} onClose={() => setReceiveId(null)}
         onReceive={(id, previouslyReceived, amount) => {
           setInventory((current) => receivePurchase(current, id, previouslyReceived, amount));
@@ -2457,7 +2622,7 @@ window.PurchasesPage = PurchasesPage;
    統計頁：每月營收 / 成本 / 淨利 + 趨勢圖 + 熱賣商品
    =========================================================== */
 
-function StatsPage({ orders }) {
+function StatsPage({ orders, inventory, customers }) {
   const monthsWithData = useMemo(() => {
     const set = new Set(orders.map((o) => ymOf(o.date)));
     return [...set].sort();
@@ -2596,7 +2761,7 @@ function StatsPage({ orders }) {
         </div>
       )}
 
-      <BackupCard />
+      <BackupCard inventory={inventory} orders={orders} customers={customers} />
     </div>
   );
 }
@@ -2637,17 +2802,33 @@ const TABS = [
   { id: "stats", label: "統計", icon: "chart" }
 ];
 
-const APP_VERSION = "V3.4";
+const APP_VERSION = "V3.5";
 
 function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
   const [tab, setTab] = usePersistentState("tab", "price");
   const [inventory, setInventory] = useState(readInventory);
   const { products, purchases } = inventory;
-  useEffect(() => { store.set("products", inventory); }, [inventory]);
+  const [storageError, setStorageError] = useState(false);
+  useEffect(() => { setStorageError(!store.set("products", inventory)); }, [inventory]);
   const setProducts = (update) => setInventory((current) => ({
     ...current, products: update(current.products)
   }));
+  const restock = (productId, amount) => {
+    const receiptId = uid();
+    const date = todayISO();
+    setInventory((current) => {
+      const product = current.products.find((p) => p.id === productId);
+      const nextStock = (Number(product?.stock) || 0) + amount;
+      if (!product || !Number.isSafeInteger(amount) || amount <= 0 || !Number.isSafeInteger(nextStock)) return current;
+      return {
+        ...current,
+        products: current.products.map((p) => p.id === productId ? { ...p, stock: nextStock } : p),
+        purchases: [{ id: receiptId, productId, name: product.name, variant: product.variant || "", date,
+          supplier: "庫存頁補貨", ordered: amount, received: amount }, ...current.purchases]
+      };
+    });
+  };
   const [orders, setOrders] = usePersistentState("orders", []);
   const [customers, setCustomers] = usePersistentState("customers", []);
   const saveCustomer = (customer) => setCustomers((prev) =>
@@ -2718,12 +2899,16 @@ function App() {
         </button>
       </div>
 
+      {storageError && <div role="alert" style={{ padding: "10px 20px", background: "var(--warn-soft)", color: "var(--ink)" }}>
+        儲存空間不足或無法寫入，本次變更尚未保存。請先匯出備份，再減少照片；完成前請勿關閉頁面。
+        <button type="button" className="restock-pill" onClick={() => setTab("stats")}>前往匯出備份</button>
+      </div>}
       <div className="app-body" key={tab}>
         {tab === "price" && <PricingPage products={products} setProducts={setProducts} defaultMargin={t.defaultMargin} tags={tags} setTags={setTags} purchases={purchases} />}
         {tab === "purchases" && <PurchasesPage inventory={inventory} setInventory={setInventory} />}
-        {tab === "orders" && <InventoryPage products={products} setProducts={setProducts} orders={orders} setOrders={setOrders} customers={customers} onSaveCustomer={saveCustomer} />}
+        {tab === "orders" && <InventoryPage products={products} setProducts={setProducts} orders={orders} setOrders={setOrders} customers={customers} onSaveCustomer={saveCustomer} onRestock={restock} />}
         {tab === "customers" && <CustomersPage customers={customers} orders={orders} onSave={saveCustomer} />}
-        {tab === "stats" && <StatsPage orders={orders} />}
+        {tab === "stats" && <StatsPage orders={orders} inventory={inventory} customers={customers} />}
       </div>
 
       <nav className="tabbar">
@@ -2764,3 +2949,4 @@ ReactDOM.createRoot(document.getElementById("root")).render(<App />);
 </script>
 </body>
 </html>
+
